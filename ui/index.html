@@ -1,0 +1,1775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Timmy — 2D game forge</title>
+<link rel="icon" href="/assets/icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<style>
+  :root{
+    --bg:#0c0e0f; --bg2:#101315; --panel:#15191b; --panel2:#1a1f22;
+    --line:#262d31; --line2:#1d2225;
+    --ink:#e7eaeb; --dim:#8a9398; --faint:#6d767c; --steel:#c7ced2;
+    --amber:#e8a33d; --ember:#e07a3a; --lime:#9fe04a; --cyan:#46c7d4; --red:#e0594a;
+    --mag:#c79be0;
+    --mono:"JetBrains Mono",ui-monospace,monospace;
+    --ui:"Sora",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  /* Interface-size scaling is applied as `zoom` on <html> (the document root) in JS.
+     Zooming the root keeps position:fixed painting and hit-testing in lockstep, so
+     modals never become "visible but unclickable". Default is no zoom at all. */
+  body{
+    font-family:var(--ui);font-size:14px;color:var(--ink);overflow:hidden;
+    background:
+      radial-gradient(900px 420px at 72% 118%, rgba(224,122,58,.10), transparent 60%),
+      radial-gradient(700px 360px at 50% -10%, rgba(70,90,100,.08), transparent 60%),
+      var(--bg);
+  }
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.32;z-index:0;
+    background-image:linear-gradient(rgba(255,255,255,.014) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(255,255,255,.014) 1px,transparent 1px);
+    background-size:30px 30px;}
+
+  .app{display:grid;grid-template-rows:34px 54px 30px 1fr;height:100vh;position:relative;z-index:1}
+
+  /* South Park-style snowy mountain-town background (faded so the UI stays readable) */
+  .bg-fx{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none}
+  .bg-town{position:absolute;inset:0;width:100%;height:100%;
+    opacity:.085;animation:townbreathe 18s ease-in-out infinite}
+  @keyframes townbreathe{0%,100%{opacity:.07}50%{opacity:.11}}
+  /* gently drifting snow — three parallax layers, seamless vertical loop */
+  .snow{animation:snowfall linear infinite}
+  .snow-a{animation-duration:27s}
+  .snow-b{animation-duration:19s}
+  .snow-c{animation-duration:13s}
+  @keyframes snowfall{from{transform:translateY(0)}to{transform:translateY(800px)}}
+  .bg-scan{position:absolute;inset:0;background:repeating-linear-gradient(
+    0deg,transparent 0 3px,rgba(0,0,0,.18) 3px 4px);mix-blend-mode:multiply;opacity:.2}
+
+  /* titlebar */
+  .titlebar{display:flex;align-items:center;gap:12px;padding:0 12px;
+    background:linear-gradient(180deg,#0f1416,#0a0d0e);border-bottom:1px solid var(--line);
+    user-select:none;position:relative;z-index:6}
+  .tb-traffic{display:flex;gap:8px}
+  .tl{width:12px;height:12px;border-radius:50%;cursor:pointer;border:1px solid #0006;transition:.12s}
+  .tl-close{background:#e0594a}.tl-close:hover{filter:brightness(1.25);box-shadow:0 0 8px #e0594a}
+  .tl-min{background:#e8a33d}.tl-min:hover{filter:brightness(1.25)}
+  .tl-max{background:#3a4248;cursor:default}
+  .tb-title{flex:1;text-align:center;font-family:var(--mono);font-size:11px;letter-spacing:.18em;
+    color:var(--dim);text-transform:lowercase}
+  .tb-title .tb-glyph{color:var(--amber)}
+  .tb-title .tb-sub{color:var(--faint)}
+  .tb-right{width:60px;text-align:right}
+  .tb-status{color:var(--lime);font-size:9px;animation:pulse 2.4s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  .drop-overlay{position:fixed;inset:0;z-index:40;background:rgba(10,12,13,.82);backdrop-filter:blur(3px);
+    display:flex;align-items:center;justify-content:center;border:3px dashed var(--amber)}
+  .drop-inner{font-family:var(--mono);font-size:18px;color:var(--amber);letter-spacing:.06em;
+    padding:40px 60px;border-radius:16px;background:var(--panel);border:1px solid var(--line)}
+
+  /* top bar */
+  .top{display:flex;align-items:center;gap:14px;padding:0 16px;
+    background:linear-gradient(180deg,#171c1f,#11161800);
+    border-bottom:1px solid var(--line);z-index:5}
+  .logo{display:flex;align-items:center;gap:11px}
+  .logo img{width:28px;height:28px;border-radius:7px;
+    box-shadow:0 0 0 1px #0006, 0 4px 14px rgba(224,122,58,.18)}
+  .logo .name{font-weight:700;letter-spacing:.02em;font-size:16px}
+  .logo .name b{color:var(--amber)}
+  .tool-chip{display:flex;align-items:center;gap:9px;padding:5px 11px;border-radius:8px;
+    background:var(--panel);border:1px solid var(--line);font-family:var(--mono);font-size:12px}
+  .tool-chip .fn{color:var(--steel)}
+  .badge{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;font-weight:700;
+    padding:3px 7px;border-radius:5px;text-transform:uppercase}
+  .badge.testing{background:rgba(232,163,61,.14);color:var(--amber);border:1px solid rgba(232,163,61,.3)}
+  .badge.release{background:rgba(159,224,74,.14);color:var(--lime);border:1px solid rgba(159,224,74,.3)}
+  .spacer{flex:1}
+  .model-pill{font-family:var(--mono);font-size:11px;color:var(--dim);display:flex;align-items:center;gap:7px;min-width:0}
+  .model-pill #modelName{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .model-pill .dot{width:7px;height:7px;border-radius:50%;background:var(--faint)}
+  .model-pill .dot.on{background:var(--lime);box-shadow:0 0 7px var(--lime)}
+  .provider-pick{background:var(--panel);border:1px solid var(--line);border-radius:8px;color:var(--ink);
+    font-family:var(--ui);font-size:12px;padding:6px 9px;cursor:pointer;outline:none}
+  .provider-pick:hover{border-color:var(--amber)}
+  .icon-btn{background:var(--panel);border:1px solid var(--line);border-radius:8px;color:var(--dim);
+    width:34px;height:34px;cursor:pointer;font-size:15px;transition:.13s;display:grid;place-items:center}
+  .icon-btn:hover{color:var(--ink);border-color:var(--amber)}
+
+  /* step rail — the agree → test → iterate → release flow, always visible */
+  .steprail{display:flex;align-items:center;gap:8px;padding:0 16px;z-index:4;
+    background:linear-gradient(180deg,#0f1416,#0c0f1000);border-bottom:1px solid var(--line)}
+  .steprail .step{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10px;
+    letter-spacing:.13em;text-transform:uppercase;color:var(--faint);transition:.22s}
+  .steprail .step i{display:grid;place-items:center;width:16px;height:16px;border-radius:50%;
+    border:1px solid var(--line);font-style:normal;font-size:9px;font-weight:700;color:var(--faint);
+    background:var(--panel);transition:.22s}
+  .steprail .step.on{color:var(--amber)}
+  .steprail .step.on i{border-color:var(--amber);color:#1c1407;background:var(--amber)}
+  .steprail .step.done{color:var(--lime)}
+  .steprail .step.done i{border-color:var(--lime);color:#11210a;background:var(--lime)}
+  .steprail .sep{flex:0 1 26px;height:1px;background:var(--line)}
+
+  /* main split — desktop two columns */
+  .main{display:grid;grid-template-columns:480px 1fr;min-height:0}
+  /* min-width:0 lets the 1fr column respect the viewport — without it, wide code
+     lines or the button row force the column past the screen edge and the right-hand
+     buttons (save / build) get pushed off-screen. */
+  .main>*{min-width:0;min-height:0}
+
+  /* dialogue column */
+  .dialogue{display:flex;flex-direction:column;min-height:0;
+    background:linear-gradient(180deg,var(--bg2),var(--bg));border-right:1px solid var(--line)}
+  .dlg-h{padding:12px 16px 8px;display:flex;align-items:center;justify-content:space-between}
+  .dlg-h .t{font-family:var(--mono);font-size:10px;letter-spacing:.16em;color:var(--faint);text-transform:uppercase}
+  .dlg-h .new{font-size:11px;color:var(--dim);cursor:pointer}
+  .dlg-h .new:hover{color:var(--amber)}
+  .thread{flex:1;overflow:auto;padding:6px 16px 16px;display:flex;flex-direction:column;gap:14px}
+  .msg{animation:rise .28s ease both}
+  @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .msg .who{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+    margin-bottom:5px;display:flex;align-items:center;gap:7px}
+  .msg.you .who{color:var(--cyan)}
+  .msg.smith .who{color:var(--amber)}
+  .msg .who::before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor}
+  .bubble{font-size:14.5px;line-height:1.62;color:var(--ink);white-space:pre-wrap;word-wrap:break-word}
+  .msg.you .bubble{color:var(--steel)}
+  .msg.smith .bubble{background:var(--panel);border:1px solid var(--line2);border-left:2px solid var(--amber);
+    border-radius:8px;padding:10px 12px}
+  .codeflag{margin-top:7px;font-family:var(--mono);font-size:11px;color:var(--lime);
+    display:flex;align-items:center;gap:6px}
+  .codeflag::before{content:"\27a4";color:var(--faint)}
+  .thinking{display:flex;align-items:center;gap:9px;color:var(--dim);font-size:12.5px;font-family:var(--mono)}
+  .intake-sum{font-weight:600;color:var(--steel);margin-bottom:6px}
+  .intake-note{color:var(--dim);font-size:12px;margin-bottom:12px}
+  .iq{margin-bottom:12px}
+  .iq-q{font-size:12.5px;color:var(--ink);margin-bottom:6px}
+  .iq-opts{display:flex;flex-wrap:wrap;gap:6px}
+  .iq-opt{font-family:var(--ui);font-size:12px;color:var(--dim);background:var(--bg);
+    border:1px solid var(--line);border-radius:7px;padding:6px 11px;cursor:pointer;transition:.12s}
+  .iq-opt:hover{border-color:var(--amber);color:var(--ink)}
+  .iq-opt.on{background:var(--amber);color:#1c1407;border-color:var(--amber);font-weight:600}
+  .iq-opt:disabled{opacity:.6;cursor:default}
+  .intake-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}
+  .btn.primary{background:var(--amber);color:#1c1407;border-color:var(--amber);font-weight:700}
+  .btn.primary:hover{filter:brightness(1.08);color:#1c1407}
+  .btn.primary:disabled{opacity:.4;cursor:default}
+  .sparks{display:inline-flex;gap:3px}
+  .sparks i{width:5px;height:5px;border-radius:50%;background:var(--ember);animation:spark 1s infinite}
+  .sparks i:nth-child(2){animation-delay:.15s}.sparks i:nth-child(3){animation-delay:.3s}
+  @keyframes spark{0%,100%{opacity:.25;transform:translateY(0)}50%{opacity:1;transform:translateY(-3px)}}
+
+  .composer{padding:12px 16px 16px;border-top:1px solid var(--line)}
+  .composer .box{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:8px;transition:.15s}
+  .composer .box:focus-within{border-color:var(--amber);box-shadow:0 0 0 3px rgba(232,163,61,.08)}
+  .composer textarea{width:100%;border:none;background:none;color:var(--ink);font-family:var(--ui);
+    font-size:13.5px;resize:none;outline:none;line-height:1.5;max-height:140px}
+  .composer textarea::placeholder{color:var(--faint)}
+  .composer .row{display:flex;align-items:center;justify-content:space-between;margin-top:6px}
+  .composer .hint{font-family:var(--mono);font-size:10px;color:var(--faint)}
+  .send{background:var(--amber);color:#1c1407;border:none;border-radius:8px;padding:7px 14px;
+    font-family:var(--ui);font-weight:700;font-size:13px;cursor:pointer;transition:.13s;display:flex;align-items:center;gap:6px}
+  .send:hover{filter:brightness(1.08)}
+  .send:disabled{opacity:.4;cursor:default}
+  .composer-acts{display:flex;align-items:center;gap:8px}
+  .attach-btn{background:transparent;border:1px solid var(--line);border-radius:8px;color:var(--dim);
+    font-family:var(--ui);font-size:12px;font-weight:600;padding:7px 11px;cursor:pointer;transition:.13s;
+    display:inline-flex;align-items:center;gap:6px}
+  .attach-btn:hover{border-color:var(--amber);color:var(--ink)}
+  .attach-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+  .attach-row:empty{display:none}
+  .chip{display:inline-flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--line);
+    border-radius:7px;padding:5px 9px;font-family:var(--mono);font-size:11px;color:var(--steel);max-width:100%}
+  .chip.code{border-left:2px solid var(--lime)}
+  .chip.ref{border-left:2px solid var(--cyan)}
+  .chip .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px}
+  .chip .sz{color:var(--faint)}
+  .chip .rm{cursor:pointer;color:var(--faint);font-weight:700;padding:0 2px}
+  .chip .rm:hover{color:var(--red)}
+
+  /* workspace column */
+  .work{display:grid;grid-template-rows:1.6fr 1fr;min-height:0;min-width:0;position:relative}
+  .work>*{min-width:0}
+  .codewrap,.testwrap{display:flex;flex-direction:column;min-height:0;min-width:0}
+  .codewrap{border-bottom:1px solid var(--line)}
+  .wh{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line2);background:var(--bg2);flex-wrap:wrap;min-width:0}
+  .wh .label{font-family:var(--mono);font-size:10px;letter-spacing:.16em;color:var(--faint);text-transform:uppercase}
+  .wh .fname{font-family:var(--mono);font-size:12px;color:var(--steel)}
+  .wh .acts{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+  .act-group{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .act-div{width:1px;align-self:stretch;min-height:20px;background:var(--line);margin:0 5px}
+  .btn{background:var(--panel);border:1px solid var(--line);border-radius:8px;color:var(--ink);
+    font-family:var(--ui);font-weight:600;font-size:12.5px;padding:7px 13px;cursor:pointer;
+    transition:.13s;display:inline-flex;align-items:center;gap:7px}
+  .btn:hover{border-color:var(--amber);color:#fff}
+  .btn:disabled{opacity:.35;cursor:default}
+  .btn.run{background:linear-gradient(180deg,#f0a948,#e07a3a);color:#1c1206;border-color:#e07a3a;
+    box-shadow:0 0 0 1px #0004,0 3px 12px rgba(224,122,58,.25)}
+  .btn.run:hover{filter:brightness(1.07);border-color:#e07a3a;color:#1c1206}
+  .btn.stop{background:rgba(224,89,74,.14);border-color:rgba(224,89,74,.45);color:var(--red);font-weight:700}
+  .btn.stop:hover{background:rgba(224,89,74,.22);color:#fff;border-color:var(--red)}
+  .btn.release{background:rgba(159,224,74,.12);border-color:rgba(159,224,74,.35);color:var(--lime)}
+  .btn.build{background:rgba(70,199,212,.12);border-color:rgba(70,199,212,.35);color:var(--cyan)}
+  .btn.build:not(:disabled):hover{background:rgba(70,199,212,.2);border-color:rgba(70,199,212,.55)}
+  .btn.ghost{background:transparent;color:var(--dim)}
+  .testbar{display:flex;align-items:center;gap:8px;padding:8px 16px;border-bottom:1px solid var(--line2);
+    background:var(--bg2);flex-wrap:wrap}
+  .testbar .spacer{flex:1}
+  .btn.polish{background:linear-gradient(180deg,#b478e6,#8a4fc4);color:#150a22;border-color:#8a4fc4;
+    box-shadow:0 0 0 1px #0004,0 3px 12px rgba(138,79,196,.25)}
+  .btn.polish:hover{filter:brightness(1.08);color:#150a22;border-color:#8a4fc4}
+  .btn.polish.running{background:linear-gradient(180deg,#e0594a,#b53d30);border-color:#b53d30;color:#fff}
+  .polish-status{font-family:var(--mono);font-size:11px;color:var(--mag)}
+
+  .codebody{flex:1;overflow:auto;min-height:0;min-width:0;position:relative}
+  pre.code{margin:0;padding:14px 16px 18px;font-family:var(--mono);font-size:12.5px;line-height:1.62;
+    counter-reset:ln;tab-size:4}
+  pre.code .line{display:block;white-space:pre;padding-left:46px;position:relative;min-height:1.62em}
+  pre.code .line::before{counter-increment:ln;content:counter(ln);position:absolute;left:0;width:34px;
+    text-align:right;color:#3c4449;user-select:none}
+  .hljs-keyword,.hljs-built_in{color:#e8a33d}
+  .hljs-string,.hljs-meta-string{color:#9fe04a}
+  .hljs-comment{color:#5b6469;font-style:italic}
+  .hljs-number,.hljs-literal{color:#46c7d4}
+  .hljs-title,.hljs-title.function_{color:#d6dcdf}
+  .hljs-title.class_{color:#c79be0}
+  .hljs-params{color:#cdd3d6}
+  .hljs-attr,.hljs-variable{color:#cdd3d6}
+
+  .empty{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    text-align:center;padding:30px;gap:14px;color:var(--faint)}
+  .empty img{width:64px;height:64px;border-radius:14px;opacity:.9;filter:saturate(1.1)}
+  .empty h2{margin:0;font-size:16px;color:var(--dim);font-weight:600}
+  .empty p{margin:0;max-width:380px;line-height:1.6;font-size:13px}
+  .empty .steps{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:4px}
+  .empty .steps span{font-family:var(--mono);font-size:10.5px;color:var(--dim);
+    border:1px solid var(--line);border-radius:20px;padding:4px 11px;background:var(--panel)}
+  .empty .starters-h{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--faint);margin-top:10px}
+  .empty .starters{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:8px;max-width:460px}
+  .starter{font-family:var(--ui);font-size:12px;color:var(--steel);background:var(--panel);
+    border:1px solid var(--line);border-radius:20px;padding:6px 13px;cursor:pointer;transition:.13s}
+  .starter:hover{border-color:var(--amber);color:#fff}
+
+  /* test console */
+  .testtop{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line2);background:var(--bg2)}
+  .testtop .args{flex:1;background:var(--bg);border:1px solid var(--line);border-radius:8px;
+    color:var(--ink);font-family:var(--mono);font-size:12px;padding:7px 10px;outline:none}
+  .testtop .args:focus{border-color:var(--amber)}
+  .console{flex:1;overflow:auto;padding:12px 16px;font-family:var(--mono);font-size:12px;line-height:1.6;
+    white-space:pre-wrap;word-break:break-word;color:var(--dim)}
+  .console .ok{color:var(--lime)} .console .bad{color:var(--red)} .console .meta{color:var(--faint)}
+  .console .out{color:var(--steel)}
+  .console .placeholder{color:var(--faint);font-style:italic}
+
+  /* ---------- modal scrims ----------
+     Closed scrims are display:none AND pointer-events:none so they can never
+     intercept clicks. Open scrims (.on) flex + accept events. Backdrop click and
+     Escape both close — nothing can get stuck over the UI. */
+  .scrim{position:fixed;inset:0;background:rgba(6,7,8,.72);display:none;align-items:center;justify-content:center;
+    z-index:50;backdrop-filter:blur(3px);pointer-events:none}
+  .scrim.on{display:flex;pointer-events:auto}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;width:420px;max-width:92vw;
+    max-height:90vh;overflow:auto;padding:20px;box-shadow:0 24px 60px rgba(0,0,0,.5)}
+  .modal h3{margin:0 0 6px;font-size:15px}
+  .modal p{margin:0 0 14px;color:var(--dim);font-size:13px;line-height:1.55}
+  .modal.danger h3{color:var(--red)}
+  .modal label{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--faint);
+    text-transform:uppercase;margin-bottom:6px}
+  .modal input{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;color:var(--ink);
+    font-family:var(--mono);font-size:13px;padding:9px 11px;outline:none;margin-bottom:14px}
+  .modal input:focus{border-color:var(--amber)}
+  .modal select.provider-pick{background:var(--bg)}
+  .modal .acts{display:flex;gap:9px;justify-content:flex-end}
+  .patts{font-family:var(--mono);font-size:12px;color:var(--red);background:rgba(224,89,74,.08);
+    border:1px solid rgba(224,89,74,.25);border-radius:8px;padding:9px 11px;margin-bottom:14px}
+  .modal.gh{width:520px}
+  .modal.review{width:560px}
+  #reviewBody{max-height:60vh;overflow-y:auto;margin-bottom:14px}
+  .review-loading{color:var(--dim);font-size:13px;padding:18px 0;text-align:center}
+  .review-verdict{font-size:14px;color:var(--ink);background:var(--bg);border:1px solid var(--line);
+    border-left:3px solid var(--amber);border-radius:8px;padding:11px 13px;margin-bottom:14px;line-height:1.5}
+  .review-issue{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:var(--bg)}
+  .review-issue.high{border-left:3px solid var(--red)}
+  .review-issue.medium{border-left:3px solid var(--amber)}
+  .review-issue.low{border-left:3px solid var(--steel)}
+  .review-issue .sev{font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;
+    padding:1px 6px;border-radius:4px;margin-right:7px}
+  .review-issue.high .sev{color:var(--red);background:rgba(224,89,74,.12)}
+  .review-issue.medium .sev{color:var(--amber);background:rgba(232,163,61,.12)}
+  .review-issue.low .sev{color:var(--steel);background:rgba(120,140,160,.12)}
+  .review-issue .ttl{font-weight:600;font-size:13px;color:var(--ink)}
+  .review-issue .ln{font-family:var(--mono);font-size:11px;color:var(--faint);margin-left:6px}
+  .review-issue .det{font-size:12px;color:var(--dim);margin-top:5px;line-height:1.5}
+  .review-strengths{font-size:12px;color:var(--lime);margin-top:10px}
+  .review-strengths li{margin:3px 0}
+  .review-clean{color:var(--lime);font-size:14px;text-align:center;padding:14px 0}
+  .review-engine{font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:10px;text-align:right}
+  .gh-row{display:flex;gap:12px}.gh-row>div{flex:1}
+  .gh-https{font-size:12px;color:var(--lime)}
+  .gh-files{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+  .ghfile{font-family:var(--mono);font-size:11px;color:var(--cyan);background:var(--bg);
+    border:1px solid var(--line);border-radius:6px;padding:4px 9px}
+  .gh-code{position:relative;margin-bottom:14px}
+  .gh-code pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+    font-family:var(--mono);font-size:11.5px;color:var(--lime);white-space:pre-wrap;word-break:break-all;margin:0}
+  .gh-code .btn{position:absolute;top:6px;right:6px;padding:3px 9px;font-size:11px}
+  .mono{font-family:var(--mono);color:var(--steel);font-size:12px}
+
+  /* library slide-in (lives inside .work, which is NOT zoomed/fixed — safe) */
+  .library{position:absolute;top:0;right:0;width:320px;height:100%;background:var(--panel);
+    border-left:1px solid var(--line);transform:translateX(100%);transition:transform .22s;z-index:9;
+    display:flex;flex-direction:column;box-shadow:-12px 0 30px rgba(0,0,0,.3)}
+  .library.on{transform:translateX(0)}
+  .lib-h{padding:12px 14px;display:flex;justify-content:space-between;align-items:center;
+    border-bottom:1px solid var(--line);font-family:var(--mono);font-size:11px;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--dim)}
+  .lib-tabs{display:flex;gap:14px}
+  .lib-tab{cursor:pointer;color:var(--faint);padding-bottom:2px;border-bottom:2px solid transparent}
+  .lib-tab:hover{color:var(--dim)}
+  .lib-tab.on{color:var(--amber);border-bottom-color:var(--amber)}
+  .lib-x{cursor:pointer}.lib-x:hover{color:var(--red)}
+  .lib-body{flex:1;overflow:auto;padding:8px}
+  .lib-empty{color:var(--faint);padding:20px;text-align:center;font-size:12px;line-height:1.6}
+  .lib-item{background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:10px;margin-bottom:8px;cursor:pointer;transition:.12s}
+  .lib-item:hover{border-color:var(--amber)}
+  .lib-item .nm{font-weight:600;font-size:13px;color:var(--ink)}
+  .lib-item .tk{font-family:var(--mono);font-size:9px;letter-spacing:.04em;color:var(--cyan);
+    background:rgba(70,199,212,.1);border:1px solid rgba(70,199,212,.28);border-radius:4px;
+    padding:1px 5px;margin-left:6px;vertical-align:middle;text-transform:none}
+  .lib-item .meta{font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:3px}
+  .lib-item .row{display:flex;justify-content:space-between;align-items:center;margin-top:6px}
+  .lib-item .open{font-size:11px;color:var(--amber)}
+  .lib-item .del{font-size:11px;color:var(--faint);cursor:pointer}
+  .lib-item .del:hover{color:var(--red)}
+
+  /* edit bar + editable textarea */
+  .editbar{display:flex;align-items:center;gap:8px;padding:8px 16px;border-top:1px solid var(--line2);background:var(--bg2)}
+  .editbar .spacer{flex:1}
+  textarea.codeedit{width:100%;height:100%;border:none;background:var(--bg);color:var(--ink);
+    font-family:var(--mono);font-size:12.5px;line-height:1.62;padding:14px 16px;resize:none;outline:none;tab-size:4}
+
+  /* diff */
+  .diffline{display:block;white-space:pre;padding-left:18px;font-family:var(--mono);font-size:12.5px;line-height:1.55}
+  .diffline.add{background:rgba(159,224,74,.12);color:var(--lime)}
+  .diffline.del{background:rgba(224,89,74,.12);color:var(--red)}
+  .diffline.ctx{color:var(--dim)}
+  .diff-h{padding:8px 16px;font-family:var(--mono);font-size:11px;color:var(--amber);border-bottom:1px solid var(--line2);
+    background:var(--bg2);display:flex;justify-content:space-between}
+  .diff-h .x{cursor:pointer;color:var(--faint)}.diff-h .x:hover{color:var(--ink)}
+
+  /* interface-size row in settings */
+  .size-row{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  .size-row input[type=range]{flex:1}
+
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#2a3237;border-radius:5px}
+  ::-webkit-scrollbar-thumb:hover{background:#343d43}
+  ::-webkit-scrollbar-track{background:transparent}
+
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel);
+    border:1px solid var(--line);border-left:3px solid var(--lime);border-radius:9px;padding:11px 16px;
+    font-size:13px;color:var(--ink);box-shadow:0 12px 30px rgba(0,0,0,.4);opacity:0;pointer-events:none;
+    transition:.25s;z-index:60}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(-4px)}
+</style>
+</head>
+<body>
+<div class="bg-fx" aria-hidden="true">
+  <svg class="bg-town" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMax slice"
+       xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <defs>
+      <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#142339"/>
+        <stop offset="55%" stop-color="#243a57"/>
+        <stop offset="100%" stop-color="#3a5270"/>
+      </linearGradient>
+      <!-- a single construction-paper pine, reused at different sizes -->
+      <g id="pine">
+        <rect x="-5" y="-20" width="10" height="22" fill="#3a2a1c"/>
+        <polygon points="0,-96 -50,-22 50,-22" fill="#2f4a37"/>
+        <polygon points="0,-128 -41,-58 41,-58" fill="#356b46"/>
+        <polygon points="0,-158 -31,-98 31,-98" fill="#2f5a3d"/>
+        <polygon points="0,-158 -10,-140 10,-140" fill="#e3ebf3" stroke="none"/>
+        <polygon points="0,-128 -13,-108 13,-108" fill="#e3ebf3" stroke="none"/>
+        <polygon points="0,-96 -16,-72 16,-72" fill="#e3ebf3" stroke="none"/>
+      </g>
+      <!-- snowflake fields (stacked + duplicated for a seamless vertical loop) -->
+      <g id="flkA" fill="#f2f6fb" stroke="none">
+        <circle cx="50" cy="40" r="1.6"/><circle cx="170" cy="140" r="1.6"/><circle cx="300" cy="70" r="1.6"/>
+        <circle cx="430" cy="180" r="1.6"/><circle cx="560" cy="50" r="1.6"/><circle cx="690" cy="150" r="1.6"/>
+        <circle cx="820" cy="90" r="1.6"/><circle cx="950" cy="170" r="1.6"/><circle cx="1080" cy="60" r="1.6"/>
+        <circle cx="120" cy="300" r="1.6"/><circle cx="360" cy="380" r="1.6"/><circle cx="600" cy="320" r="1.6"/>
+        <circle cx="840" cy="360" r="1.6"/><circle cx="1090" cy="310" r="1.6"/>
+      </g>
+      <g id="flkB" fill="#f2f6fb" stroke="none">
+        <circle cx="90" cy="90" r="2.4"/><circle cx="240" cy="30" r="2.4"/><circle cx="390" cy="130" r="2.4"/>
+        <circle cx="540" cy="200" r="2.4"/><circle cx="660" cy="80" r="2.4"/><circle cx="800" cy="170" r="2.4"/>
+        <circle cx="930" cy="40" r="2.4"/><circle cx="1050" cy="130" r="2.4"/><circle cx="1160" cy="200" r="2.4"/>
+        <circle cx="180" cy="260" r="2.4"/><circle cx="430" cy="340" r="2.4"/><circle cx="710" cy="260" r="2.4"/>
+        <circle cx="900" cy="340" r="2.4"/><circle cx="1140" cy="270" r="2.4"/>
+      </g>
+      <g id="flkC" fill="#f2f6fb" stroke="none">
+        <circle cx="60" cy="180" r="3.2"/><circle cx="260" cy="230" r="3.2"/><circle cx="470" cy="90" r="3.2"/>
+        <circle cx="640" cy="210" r="3.2"/><circle cx="880" cy="120" r="3.2"/><circle cx="1020" cy="220" r="3.2"/>
+        <circle cx="1150" cy="90" r="3.2"/><circle cx="150" cy="420" r="3.2"/><circle cx="520" cy="440" r="3.2"/>
+        <circle cx="960" cy="440" r="3.2"/>
+      </g>
+    </defs>
+
+    <!-- sky + moon + stars -->
+    <rect width="1200" height="800" fill="url(#sky)"/>
+    <circle cx="1015" cy="125" r="70" fill="#aebfd6" opacity=".18"/>
+    <circle cx="1015" cy="125" r="44" fill="#f2ecd8"/>
+    <g fill="#cdd8ea" stroke="none">
+      <circle cx="120" cy="90" r="1.3"/><circle cx="300" cy="60" r="1.3"/><circle cx="520" cy="110" r="1.3"/>
+      <circle cx="720" cy="80" r="1.3"/><circle cx="180" cy="180" r="1.3"/><circle cx="420" cy="150" r="1.3"/>
+      <circle cx="900" cy="200" r="1.3"/><circle cx="640" cy="170" r="1.3"/>
+    </g>
+
+    <!-- mountain ranges -->
+    <polygon points="0,560 130,360 250,470 400,300 540,470 700,330 880,470 1050,360 1200,470 1200,800 0,800" fill="#34465f"/>
+    <polygon points="0,610 160,430 300,540 470,360 620,540 780,440 940,560 1100,450 1200,540 1200,800 0,800" fill="#293a52"/>
+    <g fill="#cdd9e8" stroke="none">
+      <polygon points="160,430 134,468 186,468"/>
+      <polygon points="470,360 440,406 500,406"/>
+      <polygon points="780,440 754,478 806,478"/>
+      <polygon points="1100,450 1074,486 1126,486"/>
+    </g>
+
+    <!-- snow ground -->
+    <path d="M0,604 C150,566 300,612 450,584 S760,560 900,592 S1150,576 1200,596 L1200,800 L0,800 Z"
+          fill="#e3ebf3" stroke="#c4d2e2" stroke-width="1.6"/>
+    <ellipse cx="300" cy="690" rx="220" ry="46" fill="#eef4fa" opacity=".7" stroke="none"/>
+    <ellipse cx="980" cy="712" rx="260" ry="50" fill="#eef4fa" opacity=".6" stroke="none"/>
+
+    <!-- foreground cut-outs share a dark paper outline -->
+    <g stroke="#101a26" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round">
+
+      <!-- distant pines -->
+      <use href="#pine" xlink:href="#pine" transform="translate(700,572) scale(.6)"/>
+      <use href="#pine" xlink:href="#pine" transform="translate(770,580) scale(.5)"/>
+
+      <!-- cabin A (warm-lit windows tie into the amber accent) -->
+      <rect x="762" y="474" width="132" height="92" fill="#46342a"/>
+      <polygon points="748,478 908,478 828,418" fill="#5a4232"/>
+      <polygon points="756,474 900,474 828,427" fill="#e3ebf3" stroke="none"/>
+      <rect x="868" y="430" width="16" height="30" fill="#3c2c22"/>
+      <rect x="866" y="426" width="20" height="8" fill="#e3ebf3" stroke="none"/>
+      <rect x="778" y="496" width="36" height="40" fill="#e8a33d" opacity=".22" stroke="none"/>
+      <rect x="842" y="496" width="36" height="40" fill="#e8a33d" opacity=".22" stroke="none"/>
+      <rect x="782" y="500" width="28" height="32" rx="2" fill="#e8a33d"/>
+      <rect x="846" y="500" width="28" height="32" rx="2" fill="#e8a33d"/>
+      <path d="M796,500 v32 M782,516 h28 M860,500 v32 M846,516 h28" stroke="#3c2c22" stroke-width="1.6"/>
+      <rect x="816" y="520" width="26" height="46" fill="#33251c"/>
+      <circle cx="836" cy="544" r="2.4" fill="#e8a33d" stroke="none"/>
+      <g stroke="none" fill="#aeb8c4" opacity=".5">
+        <circle cx="876" cy="412" r="7"/><circle cx="884" cy="398" r="9"/><circle cx="874" cy="382" r="11"/>
+      </g>
+
+      <!-- cabin B -->
+      <rect x="980" y="498" width="92" height="68" fill="#3f2e24"/>
+      <polygon points="968,500 1084,500 1026,452" fill="#523a2c"/>
+      <polygon points="975,498 1077,498 1026,460" fill="#e3ebf3" stroke="none"/>
+      <rect x="998" y="516" width="22" height="26" rx="2" fill="#e8a33d"/>
+      <rect x="1034" y="516" width="22" height="26" rx="2" fill="#e8a33d"/>
+      <path d="M1009,516 v26 M998,529 h22 M1045,516 v26 M1034,529 h22" stroke="#3c2c22" stroke-width="1.4"/>
+
+      <!-- a little bus rolling up to the stop -->
+      <rect x="1054" y="600" width="116" height="44" rx="10" fill="#e7b53a"/>
+      <rect x="1054" y="600" width="18" height="44" fill="#d99a2f"/>
+      <rect x="1066" y="609" width="94" height="16" rx="3" fill="#bcd2dd"/>
+      <path d="M1088,609 v16 M1110,609 v16 M1132,609 v16" stroke="#7d6a36" stroke-width="1.6"/>
+      <circle cx="1060" cy="616" r="3" fill="#f6e6a6" stroke="none"/>
+      <circle cx="1080" cy="646" r="10" fill="#23201a"/><circle cx="1080" cy="646" r="4.2" fill="#6a6258" stroke="none"/>
+      <circle cx="1140" cy="646" r="10" fill="#23201a"/><circle cx="1140" cy="646" r="4.2" fill="#6a6258" stroke="none"/>
+
+      <!-- near pines -->
+      <use href="#pine" xlink:href="#pine" transform="translate(70,648) scale(.95)"/>
+      <use href="#pine" xlink:href="#pine" transform="translate(662,648) scale(.8)"/>
+
+      <!-- bus-stop sign -->
+      <rect x="88" y="470" width="9" height="178" rx="3" fill="#6a5a48"/>
+      <rect x="56" y="452" width="64" height="34" rx="5" fill="#d94f3f"/>
+      <polygon points="56,452 120,452 120,458 56,458" fill="#eef4fa" stroke="none"/>
+      <text x="88" y="476" text-anchor="middle" font-family="Sora, sans-serif" font-size="17" font-weight="700" fill="#fff" stroke="none">BUS</text>
+
+      <!-- snow mounds the kids stand in -->
+      <g stroke="none" fill="#eef4fa">
+        <ellipse cx="185" cy="650" rx="40" ry="10"/><ellipse cx="322" cy="654" rx="38" ry="10"/>
+        <ellipse cx="452" cy="649" rx="42" ry="11"/><ellipse cx="588" cy="652" rx="38" ry="10"/>
+      </g>
+
+      <!-- four bundled-up kids (original cut-outs, South Park style) -->
+      <!-- kid 1 : amber coat, brown beanie -->
+      <g transform="translate(185,650) scale(1.12)">
+        <rect x="-17" y="-18" width="13" height="18" rx="5" fill="#2a2118"/><rect x="4" y="-18" width="13" height="18" rx="5" fill="#2a2118"/>
+        <path d="M0,-86 C-26,-86 -34,-64 -34,-40 C-34,-18 -25,-12 0,-12 C25,-12 34,-18 34,-40 C34,-64 26,-86 0,-86 Z" fill="#d99a33"/>
+        <ellipse cx="-33" cy="-32" rx="9" ry="11" fill="#bd8228"/><ellipse cx="33" cy="-32" rx="9" ry="11" fill="#bd8228"/>
+        <circle cx="0" cy="-106" r="24" fill="#e9c8a4"/>
+        <path d="M-25,-118 a25,24 0 0 1 50,0 Z" fill="#46342a"/>
+        <rect x="-27" y="-120" width="54" height="9" rx="4" fill="#5a4230"/>
+        <ellipse cx="-6.5" cy="-108" rx="5.5" ry="8" fill="#fff"/><ellipse cx="6.5" cy="-108" rx="5.5" ry="8" fill="#fff"/>
+        <circle cx="-6" cy="-107" r="2.7" fill="#15110d" stroke="none"/><circle cx="7" cy="-107" r="2.7" fill="#15110d" stroke="none"/>
+        <path d="M-5,-93 q5,4 10,0" fill="none" stroke="#3a2a20" stroke-width="1.6"/>
+      </g>
+      <!-- kid 2 : teal hooded parka -->
+      <g transform="translate(322,654) scale(1.04)">
+        <rect x="-17" y="-18" width="13" height="18" rx="5" fill="#2a2118"/><rect x="4" y="-18" width="13" height="18" rx="5" fill="#2a2118"/>
+        <path d="M0,-86 C-26,-86 -34,-64 -34,-40 C-34,-18 -25,-12 0,-12 C25,-12 34,-18 34,-40 C34,-64 26,-86 0,-86 Z" fill="#3fa9b8"/>
+        <ellipse cx="-33" cy="-32" rx="9" ry="11" fill="#2f8a98"/><ellipse cx="33" cy="-32" rx="9" ry="11" fill="#2f8a98"/>
+        <ellipse cx="0" cy="-110" rx="33" ry="35" fill="#3fa9b8"/>
+        <circle cx="0" cy="-106" r="24" fill="#e9c8a4"/>
+        <ellipse cx="0" cy="-104" rx="27" ry="29" fill="none" stroke="#eef4fa" stroke-width="6"/>
+        <ellipse cx="-6.5" cy="-108" rx="5.5" ry="8" fill="#fff"/><ellipse cx="6.5" cy="-108" rx="5.5" ry="8" fill="#fff"/>
+        <circle cx="-6" cy="-107" r="2.7" fill="#15110d" stroke="none"/><circle cx="7" cy="-107" r="2.7" fill="#15110d" stroke="none"/>
+        <path d="M-5,-93 q5,4 10,0" fill="none" stroke="#3a2a20" stroke-width="1.6"/>
+      </g>
+      <!-- kid 3 : green coat, tan ushanka -->
+      <g transform="translate(452,649) scale(1.16)">
+        <rect x="-17" y="-18" width="13" height="18" rx="5" fill="#2a2118"/><rect x="4" y="-18" width="13" height="18" rx="5" fill="#2a2118"/>
+        <path d="M0,-86 C-26,-86 -34,-64 -34,-40 C-34,-18 -25,-12 0,-12 C25,-12 34,-18 34,-40 C34,-64 26,-86 0,-86 Z" fill="#6fae3a"/>
+        <ellipse cx="-33" cy="-32" rx="9" ry="11" fill="#5a922e"/><ellipse cx="33" cy="-32" rx="9" ry="11" fill="#5a922e"/>
+        <circle cx="0" cy="-106" r="24" fill="#c79a6e"/>
+        <path d="M-26,-116 a26,23 0 0 1 52,0 Z" fill="#7a5a3a"/>
+        <rect x="-27" y="-120" width="54" height="11" rx="5" fill="#cdbfae"/>
+        <rect x="-31" y="-114" width="12" height="34" rx="6" fill="#7a5a3a"/><rect x="19" y="-114" width="12" height="34" rx="6" fill="#7a5a3a"/>
+        <circle cx="-25" cy="-80" r="6" fill="#cdbfae" stroke="none"/><circle cx="25" cy="-80" r="6" fill="#cdbfae" stroke="none"/>
+        <ellipse cx="-6.5" cy="-108" rx="5.5" ry="8" fill="#fff"/><ellipse cx="6.5" cy="-108" rx="5.5" ry="8" fill="#fff"/>
+        <circle cx="-6" cy="-107" r="2.7" fill="#15110d" stroke="none"/><circle cx="7" cy="-107" r="2.7" fill="#15110d" stroke="none"/>
+        <path d="M-5,-93 q5,4 10,0" fill="none" stroke="#3a2a20" stroke-width="1.6"/>
+      </g>
+      <!-- kid 4 : lilac coat, maroon pom beanie -->
+      <g transform="translate(588,652) scale(1.06)">
+        <rect x="-17" y="-18" width="13" height="18" rx="5" fill="#2a2118"/><rect x="4" y="-18" width="13" height="18" rx="5" fill="#2a2118"/>
+        <path d="M0,-86 C-26,-86 -34,-64 -34,-40 C-34,-18 -25,-12 0,-12 C25,-12 34,-18 34,-40 C34,-64 26,-86 0,-86 Z" fill="#b489d6"/>
+        <ellipse cx="-33" cy="-32" rx="9" ry="11" fill="#9a6fc0"/><ellipse cx="33" cy="-32" rx="9" ry="11" fill="#9a6fc0"/>
+        <circle cx="0" cy="-106" r="24" fill="#e9c8a4"/>
+        <path d="M-25,-118 a25,24 0 0 1 50,0 Z" fill="#7a2f3a"/>
+        <rect x="-27" y="-119" width="54" height="9" rx="4" fill="#8e3a47"/>
+        <circle cx="0" cy="-141" r="8" fill="#eef4fa"/>
+        <ellipse cx="-6.5" cy="-108" rx="5.5" ry="8" fill="#fff"/><ellipse cx="6.5" cy="-108" rx="5.5" ry="8" fill="#fff"/>
+        <circle cx="-6" cy="-107" r="2.7" fill="#15110d" stroke="none"/><circle cx="7" cy="-107" r="2.7" fill="#15110d" stroke="none"/>
+        <path d="M-5,-93 q5,4 10,0" fill="none" stroke="#3a2a20" stroke-width="1.6"/>
+      </g>
+    </g>
+
+    <!-- drifting snow, three parallax layers (CSS-animated) -->
+    <g class="snow snow-a" opacity=".5"><use href="#flkA" xlink:href="#flkA"/><use href="#flkA" xlink:href="#flkA" y="-800"/></g>
+    <g class="snow snow-b" opacity=".7"><use href="#flkB" xlink:href="#flkB" x="34"/><use href="#flkB" xlink:href="#flkB" x="34" y="-800"/></g>
+    <g class="snow snow-c" opacity=".9"><use href="#flkC" xlink:href="#flkC" x="-26"/><use href="#flkC" xlink:href="#flkC" x="-26" y="-800"/></g>
+  </svg>
+  <div class="bg-scan"></div>
+</div>
+
+<div class="app">
+  <!-- window titlebar -->
+  <div class="titlebar" id="titlebar">
+    <div class="tb-traffic">
+      <span class="tl tl-close" id="winClose" title="Quit Timmy"></span>
+      <span class="tl tl-min" id="winMin" title="Minimize"></span>
+      <span class="tl tl-max"></span>
+    </div>
+    <div class="tb-title"><span class="tb-glyph">🎮</span> Timmy <span class="tb-sub">— 2D game forge</span></div>
+    <div class="tb-right"><span id="tbStatus" class="tb-status">●</span></div>
+  </div>
+
+  <!-- top bar -->
+  <div class="top">
+    <div class="logo">
+      <img src="/assets/icon.svg" alt="">
+      <span class="name"><b>The</b>Dawg</span>
+    </div>
+    <div class="tool-chip">
+      <span class="fn" id="fileName">untitled.py</span>
+      <span class="badge testing" id="verBadge">testing</span>
+    </div>
+    <div class="spacer"></div>
+    <select id="providerPick" class="provider-pick" title="Which model builds your games"></select>
+    <div class="model-pill"><span class="dot" id="modelDot"></span><span id="modelName">connecting…</span></div>
+    <button class="icon-btn" id="libBtn" title="Game library">▤</button>
+    <button class="icon-btn" id="settingsBtn" title="Settings">⚙</button>
+  </div>
+
+  <!-- step rail: where you are in the build flow -->
+  <div class="steprail" id="stepRail">
+    <span class="step on" data-step="agree"><i>1</i> agree</span>
+    <span class="sep"></span>
+    <span class="step" data-step="test"><i>2</i> test</span>
+    <span class="sep"></span>
+    <span class="step" data-step="iterate"><i>3</i> iterate</span>
+    <span class="sep"></span>
+    <span class="step" data-step="release"><i>4</i> release</span>
+  </div>
+
+  <!-- main -->
+  <div class="main">
+    <!-- dialogue -->
+    <div class="dialogue">
+      <div class="dlg-h">
+        <span class="t">build dialogue</span>
+        <span class="new" id="newBtn">＋ new game</span>
+      </div>
+      <div class="thread" id="thread"></div>
+      <div class="composer">
+        <div class="attach-row" id="attachRow"></div>
+        <div class="box">
+          <textarea id="input" rows="1" placeholder="Describe the 2D game you want to make…  (any genre — we'll agree on it first, or just say 'build it')"></textarea>
+          <div class="row">
+            <span class="hint">enter to send · shift+enter for newline</span>
+            <div class="composer-acts">
+              <button class="attach-btn" id="attachBtn" title="Attach a .py to work on, or files for context">⎘ attach</button>
+              <button class="send" id="sendBtn">forge ▸</button>
+            </div>
+          </div>
+        </div>
+        <input type="file" id="fileInput" multiple style="display:none"
+               accept=".py,.txt,.log,.json,.csv,.md,.cfg,.conf,.ini,.xml,.yaml,.yml,.sh,.html">
+      </div>
+    </div>
+
+    <!-- workspace -->
+    <div class="work">
+      <div class="codewrap">
+        <div class="wh">
+          <span class="label">game</span>
+          <span class="fname" id="codeFile">no draft yet</span>
+          <div class="acts">
+            <span class="act-group inspect">
+              <button class="btn ghost" id="reviewBtn" disabled title="AI + static analysis review of the whole game">🔍 review</button>
+              <button class="btn ghost" id="diffBtn" disabled title="Show what changed in the last version">⇄ diff</button>
+              <button class="btn ghost" id="editBtn" disabled title="Edit the code yourself">✎ edit</button>
+              <button class="btn ghost" id="depsBtn" disabled title="Detect &amp; install third-party packages">⬇ deps</button>
+              <button class="btn ghost" id="copyBtn" disabled>⧉ copy</button>
+            </span>
+            <span class="act-div"></span>
+            <span class="act-group ship">
+              <button class="btn ghost" id="libSaveBtn" disabled title="Save to library">★ library</button>
+              <button class="btn" id="saveBtn" disabled>⤓ save</button>
+              <button class="btn release" id="releaseBtn" disabled>◆ get ready for GitHub</button>
+              <button class="btn build" id="buildBtn" disabled title="Pack into a single-file Linux binary (PyInstaller)">⬛ build</button>
+            </span>
+          </div>
+        </div>
+        <div class="codebody" id="codeBody">
+          <div class="empty">
+            <img src="/assets/icon.svg" alt="">
+            <h2>Nothing on the anvil yet</h2>
+            <p>Describe a <b>2D game</b> on the left — any genre. We'll agree on it, I'll forge a <b style="color:var(--amber)">testing build</b> — a real <b style="color:var(--cyan)">pygame game</b> that runs on your <b>KDE desktop</b> and your <b>OnePlus 6</b> — you play it right here, and when it's right I'll package the <b style="color:var(--lime)">release build</b> for GitHub <i>or</i> pack it into a single-file Linux binary with <b style="color:var(--lime)">⬛ build</b>.</p>
+            <div class="steps"><span>1 · agree</span><span>2 · play</span><span>3 · iterate</span><span>4 · release</span></div>
+            <div class="starters-h">try one — tap to load it</div>
+            <div class="starters">
+              <button class="starter" data-fill="A fast top-down arena shooter: I'm a little ship, waves of enemies close in, WASD to move and mouse to aim and shoot, score, drops/power-ups, and it ramps up the longer I survive. Make it work with keyboard+mouse on desktop and on-screen touch controls too.">top-down shooter</button>
+              <button class="starter" data-fill="A side-scrolling platformer: run, jump and double-jump, dodge spikes and patrolling enemies, collect coins, reach the flag. Hand-build three levels that get harder, with a short line of story between them. Keyboard on desktop, touch controls on the phone.">platformer</button>
+              <button class="starter" data-fill="A cozy story RPG, top-down: a small village I can walk around, NPCs I can talk to with branching dialogue, two or three quests, an inventory, a couple of areas to explore, and a save file. Give it real writing and a little lore — go deep, not a stub.">story RPG</button>
+              <button class="starter" data-fill="A falling-block puzzle game like Tetris: pieces fall, rotate and drop them, clear full lines, speed rises as I score, with a next-piece preview and a high-score table. Keyboard on desktop, tap/swipe controls on the phone.">block puzzle</button>
+            </div>
+          </div>
+        </div>
+        <div class="editbar" id="editBar" style="display:none">
+          <span class="hint">editing — changes apply on save</span>
+          <span class="spacer"></span>
+          <button class="btn ghost" id="editCancel">cancel</button>
+          <button class="btn" id="editSave">save edits</button>
+        </div>
+      </div>
+
+      <!-- library / sessions slide-in -->
+      <div class="library" id="libPanel">
+        <div class="lib-h">
+          <div class="lib-tabs">
+            <span class="lib-tab on" id="tabSessions" data-tab="sessions">in progress</span>
+            <span class="lib-tab" id="tabLibrary" data-tab="library">saved games</span>
+          </div>
+          <span class="lib-x" id="libClose">✕</span>
+        </div>
+        <div class="lib-body" id="libBody"><div class="lib-empty">Nothing yet.</div></div>
+      </div>
+
+      <div class="testwrap">
+        <div class="testtop">
+          <span class="label">test</span>
+          <input class="args" id="args" placeholder="launch args (optional)  e.g.  --verbose  /path/to/file">
+          <button class="btn run" id="runBtn" disabled>▶ launch</button>
+          <button class="btn stop" id="stopBtn" style="display:none" title="Close the running window">■ stop</button>
+        </div>
+        <div class="testbar">
+          <button class="btn ghost" id="fixLogBtn" disabled title="Send the full run log to the AI to diagnose and fix">⮐ send log to AI &amp; fix</button>
+          <button class="btn polish" id="polishBtn" disabled title="Loop: launch → fix → improve each pass">✦ auto-polish loop</button>
+          <span class="polish-status" id="polishStatus"></span>
+          <span class="spacer"></span>
+          <button class="btn ghost" id="dlLogBtn" disabled title="Download the full session log">⤓ log</button>
+          <button class="btn ghost" id="clearLogBtn" disabled title="Clear the run log">clear log</button>
+        </div>
+        <div class="console" id="console"><span class="placeholder">Launch output appears here. The game opens its own window on your desktop — nothing runs on its own, you press the button.</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== modals: direct children of body, never inside a zoomed container ===== -->
+
+<div class="scrim" id="settingsScrim" data-close="backdrop">
+  <div class="modal">
+    <h3>Settings</h3>
+    <p>Keys stay on this machine (in the local Timmy process), are never sent to the browser, and persist to a per-user config file. Each provider has its own key.</p>
+    <label>Provider</label>
+    <select id="keyProvider" class="provider-pick" style="width:100%;margin-bottom:14px"></select>
+    <label>API key for the selected provider</label>
+    <input type="password" id="keyInput" placeholder="paste key…" autocomplete="off">
+    <label style="display:flex;justify-content:space-between;align-items:center">
+      <span>Model</span>
+      <span id="refreshModels" style="cursor:pointer;color:var(--cyan);text-transform:none;letter-spacing:0;font-family:var(--ui);font-size:11px">↻ refresh from provider</span>
+    </label>
+    <select id="keyModel" class="provider-pick" style="width:100%;margin-bottom:6px"></select>
+    <p id="modelSourceNote" style="font-size:11px;color:var(--faint);margin:0 0 12px">&nbsp;</p>
+    <p style="font-size:12px">Timmy pulls the live model list from each provider using your key, so the dropdown shows exactly what your account can call. If a key is wrong, you'll see it here. Auto-test rounds: <span id="autotestNote" style="font-family:var(--mono)">—</span>.</p>
+
+    <label style="display:flex;justify-content:space-between;align-items:center">
+      <span>Interface size</span>
+      <span id="scaleReset" style="cursor:pointer;color:var(--cyan);text-transform:none;letter-spacing:0;font-family:var(--ui);font-size:11px">↺ reset</span>
+    </label>
+    <div class="size-row">
+      <input type="range" id="scaleSlider" min="70" max="140" step="5" value="100">
+      <span id="scaleVal" style="font-family:var(--mono);font-size:12px;color:var(--steel);min-width:42px;text-align:right">100%</span>
+    </div>
+    <p style="font-size:11px;color:var(--faint);margin:0 0 12px">Scales the whole interface. If anything ever looks off, hit reset to go back to 100%.</p>
+
+    <div class="acts">
+      <button class="btn ghost" id="settingsCancel">cancel</button>
+      <button class="btn" id="settingsSave">save key</button>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="dangerScrim" data-close="backdrop">
+  <div class="modal danger">
+    <h3>⚠ Hold on</h3>
+    <p>This draft matches destructive patterns. Read it before you run it — this will execute on your machine as you.</p>
+    <div class="patts" id="dangerPatts"></div>
+    <div class="acts">
+      <button class="btn ghost" id="dangerCancel">cancel</button>
+      <button class="btn run" id="dangerConfirm">run anyway</button>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="reviewScrim" data-close="backdrop">
+  <div class="modal review">
+    <h3>🔍 Code review</h3>
+    <div id="reviewBody"><div class="review-loading">Analyzing the whole game…</div></div>
+    <div class="acts">
+      <button class="btn ghost" id="reviewClose">close</button>
+      <button class="btn" id="reviewFix" style="display:none" title="Ask the AI to fix the issues found">⮐ fix these issues</button>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="ghScrim" data-close="backdrop">
+  <div class="modal gh">
+    <div id="ghStage1">
+      <h3>◆ Get ready for GitHub</h3>
+      <p>A few details and I'll polish the code and assemble a complete repo — README with a one-line HTTPS install command, install.sh, LICENSE, .gitignore, and your push commands.</p>
+      <label>GitHub username</label>
+      <input type="text" id="ghUser" placeholder="the-priest">
+      <label>Repository name</label>
+      <input type="text" id="ghRepo" placeholder="my-game">
+      <div class="gh-row">
+        <div><label>Branch</label><input type="text" id="ghBranch" value="main"></div>
+        <div><label>License</label>
+          <select id="ghLicense" class="provider-pick" style="width:100%">
+            <option value="MIT" selected>MIT</option>
+            <option value="GPLv3">GPLv3</option>
+            <option value="Apache-2.0">Apache-2.0</option>
+            <option value="none">None</option>
+          </select></div>
+      </div>
+      <label>Copyright holder (for LICENSE)</label>
+      <input type="text" id="ghHolder" placeholder="Your name or handle">
+      <p class="gh-https">🔒 Remotes use <b>HTTPS</b>, never SSH.</p>
+      <div class="acts">
+        <button class="btn ghost" id="ghCancel">cancel</button>
+        <button class="btn release" id="ghGenerate">generate repo ▸</button>
+      </div>
+    </div>
+    <div id="ghStage2" style="display:none">
+      <h3>◆ Repo ready</h3>
+      <p>Written to <span id="ghPath" class="mono"></span></p>
+      <div class="gh-files" id="ghFiles"></div>
+      <label>One-line install / update — <b>Linux</b></label>
+      <div class="gh-code"><pre id="ghInstall"></pre><button class="btn ghost" id="ghCopyInstall">copy</button></div>
+      <label>Push to GitHub (HTTPS)</label>
+      <div class="gh-code"><pre id="ghPush"></pre><button class="btn ghost" id="ghCopyPush">copy</button></div>
+      <div class="acts">
+        <button class="btn release" id="ghDone">done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+
+/* ---------- localStorage that never throws (app-mode windows can block it) ---------- */
+function safeGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
+function safeSet(k,v){ try{ localStorage.setItem(k,v); return true; }catch(e){ return false; } }
+
+/* ---------- interface size: applied as zoom on the ROOT element only ----------
+   Zooming <html> scales painting AND hit-testing together, so modals stay
+   clickable. Default 100% applies no zoom at all. */
+const SCALE_KEY = "timmy.uiScale";
+function loadScale(){ let v=parseFloat(safeGet(SCALE_KEY)); if(!isFinite(v)) v=1; return Math.min(1.4,Math.max(0.7,v)); }
+function applyScale(v){
+  v = Math.min(1.4, Math.max(0.7, v||1));
+  document.documentElement.style.zoom = (v===1 ? "" : String(v));
+  safeSet(SCALE_KEY, String(v));
+  const sl=$("#scaleSlider"), lab=$("#scaleVal");
+  if(sl) sl.value = Math.round(v*100);
+  if(lab) lab.textContent = Math.round(v*100)+"%";
+  return v;
+}
+try{ applyScale(loadScale()); }catch(e){}
+
+/* ---------- modal helpers: open/close that can NEVER leave the UI stuck ---------- */
+function openScrim(id){ const s=$("#"+id); if(s) s.classList.add("on"); }
+function closeScrim(id){ const s=$("#"+id); if(s) s.classList.remove("on"); }
+function closeAllScrims(){ document.querySelectorAll(".scrim.on").forEach(s=>s.classList.remove("on")); }
+// backdrop click closes; clicks inside the .modal do not bubble a close
+document.querySelectorAll('.scrim[data-close="backdrop"]').forEach(scrim=>{
+  scrim.addEventListener("mousedown", e=>{ if(e.target===scrim) scrim.classList.remove("on"); });
+});
+// Escape closes whatever is open (scrims first, then the library panel)
+document.addEventListener("keydown", e=>{
+  if(e.key!=="Escape") return;
+  const open = document.querySelector(".scrim.on");
+  if(open){ open.classList.remove("on"); return; }
+  const lib = $("#libPanel"); if(lib && lib.classList.contains("on")) lib.classList.remove("on");
+});
+
+/* ============================ app state ============================ */
+let state = {
+  messages: [], code: null, name: "game", version: "testing",
+  busy: false, pendingRelease: false, intakeDone: false, intakeAnswers: {},
+  prevCode: null, sessionId: null, attachments: [], lastError: null, hasRun: false,
+  ghUser: "", ghHolder: "", _panelTab: "sessions", _intakeQs: null, _followupEl: null,
+};
+let providers = [];
+
+/* ============================ attachments ============================ */
+const MAX_FILE = 800000;
+const CODE_EXTS = ["py","pyw"];
+function fileExt(n){ const m=/\.([^.]+)$/.exec(n||""); return m?m[1].toLowerCase():""; }
+function human(n){ return n<1024?n+" B":n<1048576?(n/1024).toFixed(0)+" KB":(n/1048576).toFixed(1)+" MB"; }
+
+function renderAttachments(){
+  const row=$("#attachRow");
+  row.innerHTML = state.attachments.map((a,i)=>`
+    <span class="chip ${a.kind}" title="${escapeHtml(a.name)}">
+      <span>${a.kind==="code"?"🐍":"📎"}</span>
+      <span class="nm">${escapeHtml(a.name)}</span>
+      <span class="sz">${human(a.size)}</span>
+      <span class="rm" data-i="${i}" title="remove">✕</span>
+    </span>`).join("");
+  row.querySelectorAll(".rm").forEach(x=>x.onclick=()=>{ state.attachments.splice(+x.dataset.i,1); renderAttachments(); });
+}
+async function ingestFiles(fileList){
+  const files=[...fileList]; if(!files.length) return;
+  let loadedCode=null;
+  for(const file of files){
+    if(file.size>MAX_FILE){ toast(`"${file.name}" is too big (max ~800KB)`, true); continue; }
+    let text; try{ text=await file.text(); }catch(e){ toast(`Couldn't read "${file.name}"`, true); continue; }
+    if(CODE_EXTS.includes(fileExt(file.name))){ loadedCode={name:file.name, text}; }
+    else{ state.attachments=state.attachments.filter(a=>a.name!==file.name); state.attachments.push({name:file.name,size:file.size,kind:"ref",text}); }
+  }
+  if(loadedCode) loadCodeFile(loadedCode.name, loadedCode.text);
+  renderAttachments();
+  if(state.attachments.length) toast(`Attached ${state.attachments.length} file(s) — they'll go with your next message`);
+}
+function loadCodeFile(fname, text){
+  const lines=text.split(String.fromCharCode(10)).length;
+  state.messages=[
+    {role:"user", content:`I'm bringing in an existing file "${fname}" to work on:\n\`\`\`python\n${text}\n\`\`\``},
+    {role:"assistant", content:"Loaded your file into the workspace. Tell me what to debug, fix, improve, or turn into a GUI — or just hit Run."}
+  ];
+  state.name=(fname.replace(/\.[^.]+$/,"")||"loaded").replace(/[^A-Za-z0-9_\-]/g,"_");
+  state.intakeDone=true; state.prevCode=null; state.sessionId=null;
+  $("#thread").innerHTML="";
+  addMsg("you", `Loaded: ${fname} (${lines} lines)`);
+  addMsg("smith", "Loaded your file into the workspace — it's ready to play, debug, or improve. Tell me what you want to do with it, or hit Run to play it.");
+  loadCode(text); setVersion("testing");
+  toast(`Loaded ${fname}`);
+}
+$("#attachBtn").onclick = ()=>$("#fileInput").click();
+$("#fileInput").onchange = async (e)=>{ await ingestFiles(e.target.files); e.target.value=""; };
+
+/* drag & drop anywhere -> same pipeline */
+(function(){
+  let overlay, depth=0;
+  function showOverlay(){
+    if(overlay) return;
+    overlay=document.createElement("div"); overlay.className="drop-overlay";
+    overlay.innerHTML='<div class="drop-inner">⬇ drop files — .py loads as the game, others attach as context</div>';
+    document.body.appendChild(overlay);
+  }
+  function hideOverlay(){ if(overlay){ overlay.remove(); overlay=null; } depth=0; }
+  window.addEventListener("dragenter", e=>{ if(e.dataTransfer && [...e.dataTransfer.types].includes("Files")){ e.preventDefault(); depth++; showOverlay(); } });
+  window.addEventListener("dragover", e=>{ if(e.dataTransfer && [...e.dataTransfer.types].includes("Files")) e.preventDefault(); });
+  window.addEventListener("dragleave", e=>{ if(!e.relatedTarget){ depth--; if(depth<=0) hideOverlay(); } });
+  window.addEventListener("drop", async e=>{
+    if(!e.dataTransfer || !e.dataTransfer.files.length){ hideOverlay(); return; }
+    e.preventDefault(); hideOverlay(); await ingestFiles(e.dataTransfer.files);
+  });
+})();
+
+/* ============================ window controls ============================ */
+$("#winClose").onclick = async ()=>{
+  if(!confirm("Quit Timmy? This stops the local server.")) return;
+  try{ await fetch("/api/quit",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}); }catch(e){}
+  try{ window.close(); }catch(e){}
+  document.body.innerHTML='<div style="height:100vh;display:flex;align-items:center;justify-content:center;color:#8a9398;font-family:monospace">forge banked. later, dawg. you can close this window.</div>';
+};
+$("#winMin").onclick = ()=>toast("Minimize is handled by your window manager — use its controls");
+
+/* ============================ boot ============================ */
+init();
+async function init(){
+  await loadSounds();
+  try{
+    const s = await fetch("/api/status").then(r=>r.json());
+    providers = s.providers || [];
+    $("#providerPick").innerHTML = providers.map(p=>
+      `<option value="${p.id}" ${p.id===s.provider?"selected":""}>${p.label}${p.hasKey?"":" (no key)"}</option>`
+    ).join("");
+    $("#modelName").textContent = s.model || "ready";
+    reflectKey(s.hasKey);
+    const an=$("#autotestNote"); if(an) an.textContent = (s.autotest!=null? s.autotest : "—");
+    if(!s.hasKey) openSettings();
+  }catch(e){ $("#modelName").textContent = "server offline"; }
+  greet();
+  playSound("startup");
+  updateSteps();
+}
+
+/* ============================ providers (top bar) ============================ */
+$("#providerPick").onchange = async (e)=>{
+  const pid=e.target.value;
+  try{
+    const r = await fetch("/api/provider",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({provider:pid})}).then(r=>r.json());
+    $("#modelName").textContent = r.model || pid;
+    reflectKey(r.hasKey);
+    if(!r.hasKey){ toast("No key for that provider yet — add one in Settings", true); openSettings(); }
+    else toast("Switched to " + (providers.find(p=>p.id===pid)?.label||pid));
+  }catch(err){ toast("Couldn't switch provider", true); }
+};
+function reflectKey(has){ $("#modelDot").classList.toggle("on", !!has); }
+
+/* ============================ sounds ============================ */
+const SOUNDS = { startup:null, done:null, build:null };
+async function loadSounds(){
+  try{
+    const r = await fetch("/api/sounds").then(r=>r.json());
+    const map = r.sounds || {};
+    for(const k of Object.keys(SOUNDS)){
+      if(map[k]){ const a=new Audio(map[k]); a.preload="auto"; a.volume=0.85; a.load(); SOUNDS[k]=a; }
+    }
+  }catch(_){}
+}
+let _startupPending=false;   // set if the boot-time startup sound got autoplay-blocked
+function playSound(which){
+  const a=SOUNDS[which]; if(!a) return;
+  try{
+    a.pause(); a.currentTime=0;
+    const p=a.play();
+    if(p&&p.catch) p.catch(()=>{ if(which==="startup") _startupPending=true; });
+  }catch(_){ if(which==="startup") _startupPending=true; }
+}
+// Browsers block audio until the user interacts with the page, so a cold-load
+// startup chime is usually refused. Catch that and fire it on the very first
+// click or keypress instead — startup music plays reliably, autoplay or not.
+function _audioUnlock(){
+  if(_startupPending){ _startupPending=false; playSound("startup"); }
+  window.removeEventListener("pointerdown", _audioUnlock, true);
+  window.removeEventListener("keydown", _audioUnlock, true);
+}
+window.addEventListener("pointerdown", _audioUnlock, true);
+window.addEventListener("keydown", _audioUnlock, true);
+
+/* ============================ dialogue ============================ */
+function greet(){
+  addMsg("smith", "Right — what do you want to make? Tell me the game in plain English and I'll either ask a couple of sharp questions or lay out a quick plan. Once we agree, I forge a playable build you can run on the spot.");
+}
+function addMsg(who, text, codeFlag){
+  const t=$("#thread");
+  const m=document.createElement("div"); m.className="msg "+who;
+  m.innerHTML=`<div class="who">${who==="you"?"you":"dawg"}</div><div class="bubble"></div>`;
+  m.querySelector(".bubble").textContent=text;
+  if(codeFlag){ const f=document.createElement("div"); f.className="codeflag"; f.textContent=codeFlag; m.appendChild(f); }
+  t.appendChild(m); t.scrollTop=t.scrollHeight; return m;
+}
+function addThinking(){
+  const t=$("#thread");
+  const m=document.createElement("div"); m.className="msg smith"; m.id="thinkingMsg";
+  m.innerHTML=`<div class="who">dawg</div><div class="thinking">forging<span class="sparks"><i></i><i></i><i></i></span></div>`;
+  t.appendChild(m); t.scrollTop=t.scrollHeight;
+}
+function clearThinking(){ const m=$("#thinkingMsg"); if(m) m.remove(); }
+
+/* ============================ send / intake / converse ============================ */
+const input=$("#input");
+input.addEventListener("input", ()=>{ input.style.height="auto"; input.style.height=Math.min(input.scrollHeight,140)+"px"; });
+input.addEventListener("keydown", e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } });
+$("#sendBtn").onclick = ()=>send();
+
+async function send(forced){
+  if(typeof forced!=="string") forced=null;
+  const typed=forced || input.value.trim();
+  const hasAttach=state.attachments.length>0;
+  if((!typed && !hasAttach) || state.busy) return;
+  dismissFollowup();   // a typed reply supersedes any open tappable follow-up
+  if(!forced){ input.value=""; input.style.height="auto"; }
+
+  let display=typed || "(see attached files)";
+  let payload=typed || "Use the attached file(s) as context for what to build / fix.";
+  if(hasAttach){
+    const names=state.attachments.map(a=>a.name).join(", ");
+    display=(typed?typed+"\n\n":"")+"📎 attached: "+names;
+    const blobs=state.attachments.map(a=>{
+      const ext=fileExt(a.name);
+      const lang={json:"json",csv:"csv",sh:"bash",html:"html",xml:"xml",yaml:"yaml",yml:"yaml"}[ext]||"";
+      return `--- attached file: ${a.name} ---\n\`\`\`${lang}\n${a.text}\n\`\`\``;
+    }).join("\n\n");
+    payload=(typed?typed+"\n\n":"Here are reference files for this game:\n\n")+blobs;
+    state.attachments=[]; renderAttachments();
+  }
+
+  addMsg("you", display);
+  state.messages.push({role:"user", content:payload});
+
+  if(!state.intakeDone && !state.code && state.messages.filter(m=>m.role==="user").length===1){
+    const did=await runIntake(typed||payload);
+    if(did) return;
+  }
+  await converse();
+}
+
+async function runIntake(request){
+  state.busy=true; $("#sendBtn").disabled=true; addThinking();
+  let res;
+  try{
+    res = await fetch("/api/intake",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({request, provider:$("#providerPick").value})}).then(r=>r.json());
+  }catch(e){ res={error:"server"}; }
+  clearThinking(); state.busy=false; $("#sendBtn").disabled=false;
+  if(res.error || !res.intake || !res.intake.questions || !res.intake.questions.length){ state.intakeDone=true; return false; }
+  renderIntake(res.intake); return true;
+}
+/* Generic tappable multiple-choice block — powers BOTH the opening intake AND the
+   follow-up questions the model asks mid-build. Keeps answers in a closure so several
+   blocks can coexist without clashing. cfg:
+     {questions, summary, note, submitLabel, skipLabel, requireAll, showWho,
+      onSubmit(spec, answers), onSkip()}                                            */
+function renderQuestions(cfg){
+  const t=$("#thread");
+  const m=document.createElement("div"); m.className="msg smith intake";
+  const answers={};
+  let html="";
+  if(cfg.showWho!==false) html+=`<div class="who">dawg</div>`;
+  html+=`<div class="bubble">`;
+  if(cfg.summary) html+=`<div class="intake-sum">${escapeHtml(cfg.summary)}</div>`;
+  if(cfg.note)    html+=`<div class="intake-note">${escapeHtml(cfg.note)}</div>`;
+  cfg.questions.forEach((q,qi)=>{
+    html+=`<div class="iq" data-qi="${qi}"><div class="iq-q">${escapeHtml(q.q)}</div><div class="iq-opts">`;
+    q.options.forEach((o,oi)=>{ html+=`<button class="iq-opt" data-qi="${qi}" data-oi="${oi}" data-multi="${q.multi}">${escapeHtml(o)}</button>`; });
+    html+=`</div></div>`;
+  });
+  html+=`<div class="intake-actions">`
+      + `<button class="btn ghost q-skip">${escapeHtml(cfg.skipLabel||"skip")}</button>`
+      + `<button class="btn primary q-submit" disabled>${escapeHtml(cfg.submitLabel||"send ▸")}</button>`
+      + `</div></div>`;
+  m.innerHTML=html; t.appendChild(m); t.scrollTop=t.scrollHeight;
+
+  const submitBtn=m.querySelector(".q-submit");
+  const skipBtn=m.querySelector(".q-skip");
+  const answeredCount=()=>cfg.questions.filter((q,i)=>m.querySelectorAll(`.iq-opt[data-qi="${i}"].on`).length>0).length;
+  const refreshSubmit=()=>{
+    const n=answeredCount();
+    submitBtn.disabled = cfg.requireAll ? (n<cfg.questions.length) : (n===0);
+  };
+  m.querySelectorAll(".iq-opt").forEach(btn=>{
+    btn.onclick=()=>{
+      const qi=+btn.dataset.qi, multi=btn.dataset.multi==="true";
+      const group=m.querySelectorAll(`.iq-opt[data-qi="${qi}"]`);
+      if(multi){ btn.classList.toggle("on"); } else { group.forEach(b=>b.classList.remove("on")); btn.classList.add("on"); }
+      const picked=[...group].filter(b=>b.classList.contains("on")).map(b=>cfg.questions[qi].options[+b.dataset.oi]);
+      answers[cfg.questions[qi].q]=picked;
+      refreshSubmit();
+    };
+  });
+  const closeRow=()=>{ const r=m.querySelector(".intake-actions"); if(r) r.remove(); };
+  skipBtn.onclick=()=>{ m.querySelectorAll(".iq-opt").forEach(b=>b.disabled=true); closeRow(); if(cfg.onSkip) cfg.onSkip(); };
+  submitBtn.onclick=()=>{
+    const spec=Object.entries(answers).filter(([q,a])=>a&&a.length)
+      .map(([q,a])=>`- ${q} ${a.join(", ")}`).join("\n");
+    m.querySelectorAll(".iq-opt").forEach(b=>b.disabled=true);
+    closeRow();
+    if(cfg.onSubmit) cfg.onSubmit(spec, answers);
+  };
+  return m;
+}
+
+function renderIntake(intake){
+  state.intakeDone=true;
+  renderQuestions({
+    questions:intake.questions, summary:intake.summary,
+    note:"A few quick choices so I build exactly what you want:",
+    submitLabel:"build it ▸", skipLabel:"skip — just build it",
+    requireAll:true, showWho:true,
+    onSkip:()=>converse(),
+    onSubmit:(spec)=>{
+      state.messages.push({role:"user", content:"Build precisely to these choices:\n"+spec});
+      addMsg("you", "Selections:\n"+spec);
+      converse();
+    },
+  });
+}
+
+/* Follow-up questions: the model asked something mid-build (no code returned). Show
+   the same tappable options under its message. Answering is optional — the user can
+   still type a free-form reply, which supersedes these chips. */
+function renderFollowup(fu){
+  if(!fu || !fu.questions || !fu.questions.length) return;
+  const el=renderQuestions({
+    questions:fu.questions, summary:"",
+    note:"Tap to answer — or just type your reply below.",
+    submitLabel:"send answers ▸", skipLabel:"answer in chat",
+    requireAll:false, showWho:false,
+    onSkip:()=>{ state._followupEl=null; },
+    onSubmit:(spec)=>{
+      state._followupEl=null;
+      if(!spec) return;
+      state.messages.push({role:"user", content:"My answers:\n"+spec});
+      addMsg("you", spec);
+      converse();
+    },
+  });
+  state._followupEl=el;
+}
+
+/* If a follow-up block is still open and the user does something else (types a reply,
+   starts a new turn), retire its buttons so stale chips can't be clicked. */
+function dismissFollowup(){
+  const el=state._followupEl; if(!el) return;
+  el.querySelectorAll(".iq-opt").forEach(b=>b.disabled=true);
+  const r=el.querySelector(".intake-actions"); if(r) r.remove();
+  state._followupEl=null;
+}
+
+async function converse(){
+  state.busy=true; $("#sendBtn").disabled=true; addThinking();
+  let res;
+  try{
+    res = await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({messages:state.messages, provider:$("#providerPick").value})}).then(r=>r.json());
+  }catch(e){ res={error:"Could not reach the local server."}; }
+  clearThinking(); state.busy=false; $("#sendBtn").disabled=false;
+  if(res.error){ addMsg("smith", fmtError(res)); return; }
+  $("#modelName").textContent=res.model || $("#modelName").textContent;
+  $("#modelDot").classList.add("on");
+
+  const {prose, code}=splitReply(res.reply);
+  const hadCode=!!code;
+  if(code){
+    loadCode(code);
+    if(state.pendingRelease){ setVersion("release"); state.pendingRelease=false; } else setVersion("testing");
+    playSound("done");
+  }
+  let flag=null;
+  if(hadCode){
+    flag=`${state.name}.py updated · ${state.version} version`;
+    const at=res.autotest;
+    if(at && at.ran){
+      const rounds=(at.rounds||[]).length;
+      if(at.passed) flag += rounds>1 ? `  ·  ✓ auto-tested (fixed in ${rounds-1} round${rounds-1>1?"s":""})` : `  ·  ✓ auto-tested`;
+      else flag += `  ·  ⚠ auto-test still failing after ${rounds} tr${rounds>1?"ies":"y"} — run it to see`;
+    }
+  }
+  addMsg("smith", prose || (code?"Here's the build — try it in the play panel.":res.reply), flag);
+  state.messages.push({role:"assistant", content:res.reply});
+  // If the model asked a question instead of building, offer tappable answers for it.
+  if(!code && res.followup && res.followup.questions && res.followup.questions.length){
+    renderFollowup(res.followup);
+  }
+}
+
+function splitReply(reply){
+  let m=reply.match(/```(?:python|py)\s*\n([\s\S]*?)```/i) || reply.match(/```\s*\n([\s\S]*?)```/);
+  if(!m) return {prose:reply.trim(), code:null};
+  const code=m[1].replace(/\s+$/,"");
+  const prose=reply.replace(m[0],"").trim();
+  return {prose, code};
+}
+
+/* ============================ step rail ============================ */
+const STEP_ORDER = ["agree","test","iterate","release"];
+function currentPhase(){
+  if(!state.code) return "agree";
+  if(state.version==="release") return "release";
+  if(state.hasRun || state.lastError) return "iterate";
+  return "test";
+}
+function updateSteps(){
+  const ci = STEP_ORDER.indexOf(currentPhase());
+  document.querySelectorAll("#stepRail .step").forEach(el=>{
+    const i = STEP_ORDER.indexOf(el.dataset.step);
+    el.classList.toggle("on", i===ci);
+    el.classList.toggle("done", i<ci);
+  });
+}
+
+/* starter chips in the empty state — tap to load a prompt into the composer */
+document.addEventListener("click", e=>{
+  const s = e.target.closest(".starter");
+  if(!s) return;
+  input.value = s.dataset.fill || "";
+  input.dispatchEvent(new Event("input"));
+  input.focus();
+  toast("Loaded a starter — tweak it or hit forge");
+});
+
+/* ============================ code pane ============================ */
+function loadCode(code){
+  state.prevCode=state.code; state.code=code; guessName(code);
+  $("#codeFile").textContent=state.name+".py";
+  $("#fileName").textContent=state.name+".py";
+  renderCode(code);
+  ["copyBtn","saveBtn","runBtn","releaseBtn","fixLogBtn","polishBtn","dlLogBtn","clearLogBtn",
+   "editBtn","depsBtn","libSaveBtn","reviewBtn","buildBtn"].forEach(id=>$("#"+id).disabled=false);
+  $("#diffBtn").disabled=!state.prevCode;
+  autosaveSession();
+  updateSteps();
+}
+let _autosaveTimer;
+function autosaveSession(){
+  clearTimeout(_autosaveTimer);
+  _autosaveTimer=setTimeout(async ()=>{
+    if(!state.code) return;
+    try{
+      const r=await fetch("/api/session/save",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({id:state.sessionId, name:state.name, code:state.code, messages:state.messages,
+          version:state.version, args:$("#args").value.trim()})}).then(r=>r.json());
+      if(r.id) state.sessionId=r.id;
+    }catch(e){}
+  }, 800);
+}
+function guessName(code){
+  let m=code.match(/add_parser\(['"]([a-z0-9_\-]+)/i) || code.match(/prog=['"]([a-z0-9_\-]+)/i) || code.match(/def\s+([a-z0-9_]{3,})\s*\(/i);
+  if(m) state.name=m[1].replace(/[^a-z0-9_\-]/gi,"_");
+}
+function renderCode(code){
+  const body=$("#codeBody"); body.innerHTML="";
+  const pre=document.createElement("pre"); pre.className="code";
+  let html;
+  try{ html=hljs.highlight(code,{language:"python"}).value; }
+  catch(e){ html=code.replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+  pre.innerHTML=html.split("\n").map(l=>`<span class="line">${l||" "}</span>`).join("");
+  body.appendChild(pre);
+}
+function setVersion(v){ state.version=v; const b=$("#verBadge"); b.className="badge "+v; b.textContent=v; updateSteps(); }
+
+$("#copyBtn").onclick=()=>{ navigator.clipboard.writeText(state.code||""); toast("Copied to clipboard"); };
+$("#saveBtn").onclick=save;
+
+/* ============================ diff ============================ */
+$("#diffBtn").onclick=()=>{ if(state.prevCode && state.code) renderDiff(state.prevCode, state.code); };
+function renderDiff(a,b){
+  const A=a.split("\n"), B=b.split("\n");
+  const setB=new Set(B), setA=new Set(A);
+  const body=$("#codeBody");
+  let html=`<div class="diff-h"><span>diff — previous → current</span><span class="x" id="diffClose">✕ back to code</span></div><pre class="code">`;
+  B.forEach(line=>{ const cls=setA.has(line)?"ctx":"add"; html+=`<span class="diffline ${cls}">${cls==="add"?"+ ":"  "}${escapeHtml(line)||" "}</span>`; });
+  const removed=A.filter(l=>!setB.has(l));
+  if(removed.length){ html+=`<span class="diffline ctx">  </span>`; removed.forEach(line=>html+=`<span class="diffline del">- ${escapeHtml(line)||" "}</span>`); }
+  html+=`</pre>`; body.innerHTML=html;
+  $("#diffClose").onclick=()=>renderCode(state.code);
+}
+
+/* ============================ review ============================ */
+$("#reviewBtn").onclick=async ()=>{
+  if(!state.code) return;
+  openScrim("reviewScrim");
+  $("#reviewFix").style.display="none";
+  $("#reviewBody").innerHTML=`<div class="review-loading">Analyzing the whole game — static analysis + AI review…</div>`;
+  let r;
+  try{ r=await fetch("/api/review",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:state.code})}).then(x=>x.json()); }
+  catch(e){ $("#reviewBody").innerHTML=`<div class="review-issue high"><span class="ttl">Couldn't reach the local server</span><div class="det">Is Timmy still running in your terminal?</div></div>`; return; }
+  renderReview(r);
+};
+function renderReview(r){
+  const body=$("#reviewBody");
+  if(r.error){ body.innerHTML=`<div class="review-issue medium"><span class="ttl">${escapeHtml(r.error)}</span></div>`; return; }
+  let html="";
+  if(r.verdict) html+=`<div class="review-verdict">${escapeHtml(r.verdict)}</div>`;
+  const issues=r.issues||[];
+  if(!issues.length){ html+=`<div class="review-clean">✓ No issues found — this game looks solid.</div>`; }
+  else issues.forEach(it=>{
+    const sev=(it.severity||"medium").toLowerCase();
+    const ln=it.line?`<span class="ln">line ${escapeHtml(String(it.line))}</span>`:"";
+    html+=`<div class="review-issue ${sev}"><span class="sev">${escapeHtml(sev)}</span><span class="ttl">${escapeHtml(it.title||"issue")}</span>${ln}<div class="det">${escapeHtml(it.detail||"")}</div></div>`;
+  });
+  if(r.strengths && r.strengths.length) html+=`<div class="review-strengths"><b>Strengths:</b><ul>`+r.strengths.map(s=>`<li>${escapeHtml(s)}</li>`).join("")+`</ul></div>`;
+  html+=`<div class="review-engine">analysis: ${escapeHtml(r.engine||"ast")}${r.model?" · model: "+escapeHtml(String(r.model).split("/").pop()):""}</div>`;
+  body.innerHTML=html;
+  const fixable=issues.filter(i=>(i.severity||"").toLowerCase()!=="low");
+  if(fixable.length){ const btn=$("#reviewFix"); btn.style.display="inline-flex"; btn._issues=issues; btn._verdict=r.verdict; }
+}
+$("#reviewClose").onclick=()=>closeScrim("reviewScrim");
+$("#reviewFix").onclick=async ()=>{
+  const issues=$("#reviewFix")._issues||[];
+  closeScrim("reviewScrim");
+  const list=issues.map(i=>`- [${(i.severity||"").toUpperCase()}] ${i.title}: ${i.detail}${i.line?` (line ${i.line})`:""}`).join("\n");
+  send(`Please fix these issues found in a code review of the current game, and return the FULL corrected script:\n\n${list}`);
+};
+
+/* ============================ edit ============================ */
+$("#editBtn").onclick=()=>{
+  if(!state.code) return;
+  $("#codeBody").innerHTML=`<textarea class="codeedit" id="codeEdit" spellcheck="false"></textarea>`;
+  $("#codeEdit").value=state.code;
+  $("#editBar").style.display="flex";
+  $("#codeEdit").focus();
+};
+$("#editCancel").onclick=()=>{ $("#editBar").style.display="none"; renderCode(state.code); };
+$("#editSave").onclick=()=>{
+  const v=$("#codeEdit").value;
+  state.prevCode=state.code; state.code=v;
+  $("#editBar").style.display="none"; renderCode(v); $("#diffBtn").disabled=false;
+  state.messages.push({role:"assistant", content:"```python\n"+v+"\n```"});
+  state.messages.push({role:"user", content:"(I manually edited the code above — treat that as the current version.)"});
+  toast("Edits applied — model is in sync");
+};
+
+/* ============================ deps ============================ */
+$("#depsBtn").onclick=async ()=>{
+  if(!state.code) return;
+  let d;
+  try{ d=await fetch("/api/deps",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:state.code})}).then(r=>r.json()); }
+  catch(e){ toast("Couldn't reach the local server", true); return; }
+  const pip=d.pip||[], tk=d.toolkit;
+  if(!pip.length){
+    if(tk && tk.module==="tkinter") addMsg("smith","This game uses Tkinter, part of Python's standard library — no pip install needed. If it's missing on Debian/Ubuntu/Mint:\n\n```\nsudo apt install python3-tk\n```");
+    else toast("Pure stdlib — nothing to install");
+    return;
+  }
+  const label=tk?`${tk.label} toolkit + `:"";
+  if(!confirm(`Install ${label}deps into Timmy's managed venv?\n\n  ${pip.join("\n  ")}`)) return;
+  toast("Installing "+pip.join(", ")+"…");
+  let r;
+  try{ r=await fetch("/api/deps/install",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pip})}).then(r=>r.json()); }
+  catch(e){ toast("pip install couldn't reach server", true); return; }
+  if(r.ok){ toast("Installed: "+pip.join(", ")); addMsg("smith","Installed into the managed venv: "+pip.join(", ")+". Launches will use it automatically."); }
+  else addMsg("smith","⚠ pip install had trouble:\n"+(r.log||"unknown"));
+};
+
+/* ============================ library / sessions ============================ */
+$("#libSaveBtn").onclick=async ()=>{
+  if(!state.code){ toast("Nothing to save yet", true); return; }
+  let r;
+  try{ r=await fetch("/api/library/save",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({name:state.name, code:state.code, messages:state.messages, version:state.version, args:$("#args").value.trim(), sessionId:state.sessionId})}).then(r=>r.json()); }
+  catch(e){ toast("Couldn't reach the local server", true); return; }
+  if(r && r.error){ toast("⚠ "+r.error, true); return; }
+  toast(`Saved "${state.name}" to library — its state is banked`);
+};
+$("#libBtn").onclick=()=>openPanel(state._panelTab||"sessions");
+$("#libClose").onclick=()=>$("#libPanel").classList.remove("on");
+$("#tabSessions").onclick=()=>openPanel("sessions");
+$("#tabLibrary").onclick=()=>openPanel("library");
+async function openPanel(tab){
+  state._panelTab=tab;
+  $("#libPanel").classList.add("on");
+  $("#tabSessions").classList.toggle("on", tab==="sessions");
+  $("#tabLibrary").classList.toggle("on", tab==="library");
+  if(tab==="sessions") renderSessions(); else renderLibrary();
+}
+async function renderSessions(){
+  let r;
+  try{ r=await fetch("/api/sessions").then(r=>r.json()); }catch(e){ $("#libBody").innerHTML='<div class="lib-empty">Server offline.</div>'; return; }
+  const ss=r.sessions||[];
+  if(!ss.length){ $("#libBody").innerHTML='<div class="lib-empty">No games in progress.<br>Start building and it auto-saves here.</div>'; return; }
+  $("#libBody").innerHTML=ss.map(s=>`
+    <div class="lib-item" data-id="${s.id}">
+      <div class="nm">${escapeHtml(s.name)}${s.toolkit?` <span class="tk">${escapeHtml(s.toolkit)}</span>`:""}</div>
+      <div class="meta">${s.turns} turns · ${s.hasCode?"has code":"no code yet"} · ${escapeHtml(s.updated||"")}</div>
+      <div class="row"><span class="open">resume ▸</span><span class="del" data-id="${s.id}">delete</span></div>
+    </div>`).join("");
+  $("#libBody").querySelectorAll(".lib-item").forEach(el=>{
+    el.onclick=(e)=>{ if(!e.target.classList.contains("del")) resumeSession(el.dataset.id); };
+    el.querySelector(".del").onclick=async(e)=>{ e.stopPropagation();
+      await fetch("/api/session/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:el.dataset.id})});
+      renderSessions(); };
+  });
+}
+async function resumeSession(id){
+  let r;
+  try{ r=await fetch("/api/session/load",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})}).then(r=>r.json()); }
+  catch(e){ toast("Couldn't load", true); return; }
+  if(r.error){ toast(r.error, true); return; }
+  const s=r.session;
+  state.messages=s.messages||[]; state.name=s.name||s.id; state.sessionId=s.id;
+  state.intakeDone=true; state.prevCode=null; state.attachments=[]; state.hasRun=false; renderAttachments();
+  $("#thread").innerHTML="";
+  (s.messages||[]).forEach(m=>{
+    if(m.role==="user") addMsg("you", m.content.replace(/```[\s\S]*?```/g,"[code]"));
+    else if(m.role==="assistant"){ const {prose}=splitReply(m.content); if(prose) addMsg("smith", prose); }
+  });
+  if(s.code){ loadCode(s.code); setVersion(s.version||"testing"); }
+  $("#args").value=s.args||"";
+  $("#libPanel").classList.remove("on");
+  toast(`Resumed "${s.name}"`);
+}
+async function renderLibrary(){
+  let r;
+  try{ r=await fetch("/api/library").then(r=>r.json()); }catch(e){ $("#libBody").innerHTML='<div class="lib-empty">Server offline.</div>'; return; }
+  const tools=r.tools||[];
+  if(!tools.length){ $("#libBody").innerHTML='<div class="lib-empty">No saved games yet.<br>Build one, then ★ library.</div>'; return; }
+  $("#libBody").innerHTML=tools.map(t=>`
+    <div class="lib-item" data-id="${t.id}">
+      <div class="nm">${escapeHtml(t.name)}${t.toolkit?` <span class="tk">${escapeHtml(t.toolkit)}</span>`:""}</div>
+      <div class="meta">${t.lines} lines · ${escapeHtml(t.version||"testing")} · saved ${escapeHtml(t.saved||"")}</div>
+      <div class="row"><span class="open">open ▸</span><span class="del" data-id="${t.id}">delete</span></div>
+    </div>`).join("");
+  $("#libBody").querySelectorAll(".lib-item").forEach(el=>{
+    el.querySelector(".open").onclick=()=>loadFromLibrary(el.dataset.id);
+    el.onclick=(e)=>{ if(!e.target.classList.contains("del")) loadFromLibrary(el.dataset.id); };
+    el.querySelector(".del").onclick=async(e)=>{ e.stopPropagation();
+      await fetch("/api/library/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:el.dataset.id})});
+      renderLibrary(); };
+  });
+}
+async function loadFromLibrary(id){
+  let r;
+  try{ r=await fetch("/api/library/load",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})}).then(r=>r.json()); }
+  catch(e){ toast("Couldn't load", true); return; }
+  if(r.error){ toast("Couldn't load: "+r.error, true); return; }
+  const tool=r.tool;
+  state.messages=tool.messages||[]; state.name=tool.name||tool.id; state.intakeDone=true; state.prevCode=null;
+  state.sessionId=null; state.attachments=[]; state.hasRun=false; renderAttachments();
+  $("#thread").innerHTML="";
+  (tool.messages||[]).forEach(m=>{
+    if(m.role==="user") addMsg("you", m.content.replace(/```[\s\S]*?```/g,"[code]"));
+    else if(m.role==="assistant"){ const {prose}=splitReply(m.content); if(prose) addMsg("smith", prose); }
+  });
+  addMsg("smith", `Loaded "${tool.name}" from the library at its saved ${tool.version||"testing"} state — conversation, code and args restored. Keep iterating where you left off.`);
+  loadCode(tool.code); setVersion(tool.version||"testing");
+  $("#args").value=tool.args||"";
+  $("#libPanel").classList.remove("on");
+}
+
+/* ============================ release / github ============================ */
+$("#releaseBtn").onclick=()=>{ if(state.code) openGithub(); };
+function openGithub(){
+  $("#ghUser").value=state.ghUser||"";
+  $("#ghRepo").value=state.name||"game";
+  $("#ghBranch").value="main";
+  $("#ghHolder").value=state.ghHolder||"";
+  openScrim("ghScrim");
+  $("#ghStage1").style.display="block";
+  $("#ghStage2").style.display="none";
+  $("#ghUser").focus();
+}
+$("#ghCancel").onclick=()=>closeScrim("ghScrim");
+$("#ghGenerate").onclick=async ()=>{
+  const details={
+    username:$("#ghUser").value.trim(),
+    repo:($("#ghRepo").value.trim()||state.name),
+    branch:$("#ghBranch").value.trim()||"main",
+    license:$("#ghLicense").value,
+    holder:$("#ghHolder").value.trim()||$("#ghUser").value.trim(),
+  };
+  if(!details.username){ toast("GitHub username is required", true); return; }
+  state.ghUser=details.username; state.ghHolder=details.holder;
+  $("#ghGenerate").disabled=true; $("#ghGenerate").textContent="polishing code…";
+  state.pendingRelease=true;
+  let rel;
+  try{
+    const msgs=[...state.messages, {role:"user", content:"Produce the RELEASE version: polished, top docstring with usage, clean argparse CLI with --help, robust error handling, sensible exit codes, helpful comments, no dead code. Return the full script."}];
+    rel=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:msgs, provider:$("#providerPick").value})}).then(r=>r.json());
+  }catch(e){ rel={error:"server"}; }
+  if(rel.error){ toast("⚠ "+rel.error, true); resetGhBtn(); return; }
+  const {code:relCode}=splitReply(rel.reply);
+  if(relCode){ loadCode(relCode); setVersion("release"); state.messages.push({role:"assistant",content:rel.reply}); }
+  const finalCode=relCode||state.code;
+  $("#ghGenerate").textContent="assembling repo…";
+  let gh;
+  try{ gh=await fetch("/api/github",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:finalCode, details, provider:$("#providerPick").value})}).then(r=>r.json()); }
+  catch(e){ gh={error:"server"}; }
+  if(gh.error){ toast("⚠ "+gh.error, true); resetGhBtn(); return; }
+  let written;
+  try{ written=await fetch("/api/github/write",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:finalCode, name:details.repo, github:gh.github, details})}).then(r=>r.json()); }
+  catch(e){ written={error:"server"}; }
+  resetGhBtn();
+  if(written.error){ toast("⚠ "+written.error, true); return; }
+  showGhResult(written);
+};
+function resetGhBtn(){ $("#ghGenerate").disabled=false; $("#ghGenerate").textContent="generate repo ▸"; }
+function showGhResult(w){
+  $("#ghStage1").style.display="none"; $("#ghStage2").style.display="block";
+  $("#ghFiles").innerHTML=(w.files||[]).map(f=>`<span class="ghfile">${escapeHtml(f)}</span>`).join("");
+  $("#ghInstall").textContent=w.install_line_posix||w.install_line||"";
+  $("#ghPush").textContent=(w.push||[]).join("\n");
+  $("#ghPath").textContent=w.path||"";
+  addMsg("smith", `GitHub repo assembled at ${w.path}. The README has the one-line Linux installer, and the push commands are in the dialog — HTTPS remote, as you wanted.`, `${state.name} · release + repo files`);
+}
+$("#ghCopyInstall").onclick=()=>{ navigator.clipboard.writeText($("#ghInstall").textContent); toast("Linux install line copied"); };
+$("#ghCopyPush").onclick=()=>{ navigator.clipboard.writeText($("#ghPush").textContent); toast("Push commands copied"); };
+$("#ghDone").onclick=()=>closeScrim("ghScrim");
+
+/* ============================ build (PyInstaller) ============================ */
+$("#buildBtn").onclick=async ()=>{
+  if(!state.code) return;
+  let d={pip:[], toolkit:null};
+  try{ d=await fetch("/api/deps",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:state.code})}).then(r=>r.json()); }catch(_){}
+  const hasToolkit=!!d.toolkit;
+  const wantConsole=hasToolkit?false:confirm("This program doesn't look like a windowed game — build a console executable?\n\n(OK = console, Cancel = windowed)");
+  const note=(d.pip && d.pip.length)?`\n\nWill pip-install into Timmy's managed venv first:\n  ${d.pip.join("\n  ")}\n`:"";
+  if(!confirm(`Build a single-file executable for THIS OS with PyInstaller?${note}\n\nThis can take a couple of minutes the first time.`)) return;
+  const btn=$("#buildBtn"); const orig=btn.textContent; btn.disabled=true; btn.textContent="⬛ building…";
+  addMsg("smith", `🎮 Packing ${state.name} into a standalone executable with PyInstaller — first run installs the toolchain into the managed venv, so give it a minute.`);
+  toast("Building executable — this may take a minute…");
+  let r;
+  try{ r=await fetch("/api/build",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:state.code, name:state.name, console:wantConsole})}).then(r=>r.json()); }
+  catch(e){ btn.disabled=false; btn.textContent=orig; addMsg("smith","⚠ The build request couldn't reach the local server."); return; }
+  btn.disabled=false; btn.textContent=orig;
+  if(r.ok){
+    playSound("build"); toast(`Built ${r.target} (${r.size_mb} MB)`);
+    addMsg("smith", `✅ Built a ${r.target} — ${r.size_mb} MB.\n\nPath: ${r.path}\n\nIt's self-contained: copy that single file to another Linux machine (same architecture) and run it — no Python needed there.`);
+  } else addMsg("smith", "⚠ Build failed:\n\n```\n"+(r.log||"no log")+"\n```");
+};
+
+/* ============================ save ============================ */
+async function save(){
+  if(!state.code) return;
+  let res;
+  try{ res=await fetch("/api/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:state.code, name:state.name, kind:state.version})}).then(r=>r.json()); }
+  catch(e){ toast("Couldn't reach the local server", true); return; }
+  if(res.error){ toast("⚠ "+res.error, true); return; }
+  toast("Saved → "+res.path);
+}
+
+/* ============================ run / launch ============================ */
+let currentPid=null;
+$("#runBtn").onclick=()=>run(false);
+$("#stopBtn").onclick=stopRunning;
+function showStop(pid){ currentPid=pid||null; $("#stopBtn").style.display=pid?"inline-flex":"none"; }
+async function stopRunning(){
+  if(!currentPid){ showStop(null); return; }
+  try{ await fetch("/api/stop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pid:currentPid})}); toast("Closed the running window"); }
+  catch(e){ toast("Couldn't reach the local server", true); }
+  showStop(null);
+}
+async function run(confirmed){
+  if(!state.code) return;
+  const args=$("#args").value.trim();
+  const con=$("#console");
+  const cmdLine=`$ python3 ${esc(state.name)}.py ${esc(args)}`;
+  con.innerHTML=`<span class="meta">${cmdLine}</span>\n<span class="placeholder">launching…</span>`;
+  let res;
+  try{ res=await fetch("/api/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:state.code, args, confirm:confirmed, name:state.name})}).then(r=>r.json()); }
+  catch(e){ con.innerHTML=`<span class="meta">${cmdLine}</span>\n\n<span class="bad">Couldn't reach the local Timmy server. Is it still running in your terminal?</span>`; return; }
+  if(res.needsConfirm){ $("#dangerPatts").textContent=res.patterns.join("   ·   "); openScrim("dangerScrim"); con.innerHTML=`<span class="placeholder">Blocked pending your confirmation.</span>`; return; }
+  state.hasRun=true; updateSteps();
+  if(res.error){ con.innerHTML=`<span class="meta">${cmdLine}</span>\n\n<span class="bad">${esc(res.error)}</span>`; return; }
+  if(res.gui){
+    let html=`<span class="meta">${cmdLine}</span>\n\n`;
+    if(res.launched){ showStop(res.pid); html+=`<span class="ok">✓ window launched · ${res.seconds}s</span>\n`; html+=`<span class="out">${esc(res.note||"GUI is open on your desktop.")}</span>`; if(res.stderr) html+=`\n<span class="meta">startup notes:</span>\n<span class="meta">${esc(res.stderr)}</span>`; }
+    else if(res.exit===0){ showStop(null); html+=`<span class="ok">✓ ran and exited cleanly · ${res.seconds}s</span>`; if(res.stderr) html+=`\n<span class="meta">${esc(res.stderr)}</span>`; }
+    else{ showStop(null); html+=`<span class="bad">✗ the GUI failed to start · exit ${res.exit} · ${res.seconds}s</span>\n\n`; html+=`<span class="bad">${esc(res.stderr||"")}</span>`; html+=`\n<span class="meta">— double-click here, or paste this on the left, and I'll fix it</span>`; state.lastError=res.stderr; }
+    con.innerHTML=html; con.scrollTop=con.scrollHeight; return;
+  }
+  showStop(null);
+  let html=`<span class="meta">${cmdLine}</span>\n\n`;
+  if(res.stdout) html+=`<span class="out">${esc(res.stdout)}</span>`;
+  if(res.stderr) html+=`<span class="bad">${esc(res.stderr)}</span>`;
+  if(!res.stdout && !res.stderr) html+=`<span class="placeholder">(no output)</span>`;
+  html+=`\n<span class="meta">────────────</span>\n`;
+  html+=res.exit===0?`<span class="ok">✓ exit 0 · ${res.seconds}s · clean</span>`:`<span class="bad">✗ exit ${res.exit} · ${res.seconds}s</span>  <span class="meta">— paste the error to me on the left and I'll fix it</span>`;
+  con.innerHTML=html; con.scrollTop=con.scrollHeight;
+  if(res.exit!==0 && res.stderr) state.lastError=res.stderr;
+}
+$("#dangerCancel").onclick=()=>closeScrim("dangerScrim");
+$("#dangerConfirm").onclick=()=>{ closeScrim("dangerScrim"); run(true); };
+
+/* ============================ send log to AI & fix ============================ */
+$("#fixLogBtn").onclick=async ()=>{
+  if(!state.code || state.busy) return;
+  state.busy=true; addThinking();
+  let res;
+  try{ res=await fetch("/api/fixlog",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:state.code, messages:state.messages, provider:$("#providerPick").value})}).then(r=>r.json()); }
+  catch(e){ res={error:"Couldn't reach the local server."}; }
+  clearThinking(); state.busy=false;
+  applyModelResult(res, "Sent the run log to the AI to diagnose.");
+};
+
+/* ============================ auto-polish loop ============================ */
+let polishing=false;
+$("#polishBtn").onclick=async ()=>{
+  if(polishing){ polishing=false; return; }
+  if(!state.code) return;
+  polishing=true;
+  const btn=$("#polishBtn"); btn.classList.add("running"); btn.textContent="■ stop polishing";
+  let round=0;
+  while(polishing){
+    round++;
+    $("#polishStatus").textContent=`polishing — round ${round}…`;
+    let res;
+    try{ res=await fetch("/api/polish",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:state.code, messages:state.messages, provider:$("#providerPick").value})}).then(r=>r.json()); }
+    catch(e){ res={error:"Couldn't reach the local server."}; }
+    if(res.error){ addMsg("smith","⚠ "+res.error); break; }
+    const {prose, code}=splitReply(res.reply);
+    if(!code){ $("#polishStatus").textContent="stopped — model returned no code"; break; }
+    loadCode(code); setVersion("testing");
+    state.messages.push({role:"assistant", content:res.reply});
+    addMsg("smith", prose||"Polished a round.", `${state.name}.py · polish round ${round}`);
+    await run(true);
+    if(round>=6){ $("#polishStatus").textContent="stopped — hit 6-round safety cap"; break; }
+  }
+  polishing=false;
+  btn.classList.remove("running"); btn.textContent="✦ auto-polish loop";
+  if(!$("#polishStatus").textContent.startsWith("stopped")) $("#polishStatus").textContent="done";
+  setTimeout(()=>$("#polishStatus").textContent="", 4000);
+};
+
+/* ============================ log download / clear ============================ */
+$("#dlLogBtn").onclick=()=>{ window.open("/api/log.txt","_blank"); };
+$("#clearLogBtn").onclick=async ()=>{
+  try{ await fetch("/api/log.clear",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}); toast("Run log cleared"); }
+  catch(e){ toast("Couldn't reach the local server", true); }
+};
+function applyModelResult(res, introIfProse){
+  if(res.error){ addMsg("smith", fmtError(res)); return; }
+  $("#modelName").textContent=res.model||$("#modelName").textContent; reflectKey(true);
+  const {prose, code}=splitReply(res.reply);
+  let flag=null;
+  if(code){ loadCode(code); setVersion("testing"); flag=`${state.name}.py updated`; const at=res.autotest; if(at && at.ran) flag+=at.passed?"  ·  ✓ auto-tested":"  ·  ⚠ check still failing"; }
+  addMsg("smith", prose||introIfProse||"Done.", flag);
+  state.messages.push({role:"assistant", content:res.reply});
+}
+$("#console").addEventListener("dblclick", ()=>{ if(state.lastError){ send("It failed with this error:\n"+state.lastError); state.lastError=null; } });
+
+/* ============================ settings ============================ */
+$("#settingsBtn").onclick=openSettings;
+let _settingsProvs=[];
+function openSettings(){
+  openScrim("settingsScrim");
+  fetch("/api/status").then(r=>r.json()).then(s=>{
+    _settingsProvs=s.providers||[];
+    const kp=$("#keyProvider");
+    kp.innerHTML=_settingsProvs.map(p=>`<option value="${p.id}" ${p.id===s.provider?"selected":""}>${p.label}${p.hasKey?" ✓":""}</option>`).join("");
+    const refresh=()=>{ updateKeyPlaceholder(_settingsProvs, kp.value); populateModels(kp.value); };
+    refresh(); kp.onchange=refresh;
+    const an=$("#autotestNote"); if(an && s.autotest!=null) an.textContent=s.autotest;
+  }).catch(()=>{});
+  setTimeout(()=>{ const ki=$("#keyInput"); if(ki) ki.focus(); }, 30);
+}
+function populateModels(pid){
+  const p=_settingsProvs.find(x=>x.id===pid), note=$("#modelSourceNote");
+  if(!p){ $("#keyModel").innerHTML=""; if(note) note.textContent="\u00a0"; return; }
+  $("#keyModel").innerHTML=(p.models||[]).map((m,i)=>`<option value="${escapeHtml(m)}" ${m===p.chosen?"selected":""}>${escapeHtml(m)}${i===0?"  (biggest)":""}</option>`).join("");
+  if(note){
+    if(p.live) note.innerHTML=`<span style="color:var(--lime)">● live</span> — ${(p.models||[]).length} models from your ${escapeHtml(p.label)} key`;
+    else note.innerHTML=p.hasKey?`<span style="color:var(--amber)">● fallback list</span> — hit ↻ refresh to pull your live models`:`<span style="color:var(--faint)">add a key, then ↻ refresh for your live models</span>`;
+  }
+}
+$("#refreshModels").onclick=async ()=>{
+  const provider=$("#keyProvider").value, note=$("#modelSourceNote");
+  if(note) note.textContent="fetching live models…";
+  let r;
+  try{ r=await fetch("/api/models/refresh",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({provider})}).then(x=>x.json()); }
+  catch(e){ if(note) note.textContent="couldn't reach the server"; return; }
+  const p=_settingsProvs.find(x=>x.id===provider);
+  if(p && r.models){ p.models=r.models; p.chosen=r.models[0]; p.live=(r.source==="live"); }
+  populateModels(provider);
+  if(r.source==="live") toast(`Pulled ${r.models.length} models from ${p?p.label:provider}`);
+  else if(note) note.innerHTML=`<span style="color:var(--red)">couldn't fetch live list</span> — ${escapeHtml(r.error||"check the key")}`;
+};
+function updateKeyPlaceholder(provs, pid){
+  const p=(provs||[]).find(x=>x.id===pid);
+  $("#keyInput").placeholder=(p && p.hasKey)?"A key is already saved — leave blank to keep it":"paste key…";
+}
+$("#settingsCancel").onclick=()=>closeScrim("settingsScrim");
+$("#settingsSave").onclick=async ()=>{
+  const key=$("#keyInput").value.trim();
+  const provider=$("#keyProvider").value;
+  let model=$("#keyModel").value;
+  const p=_settingsProvs.find(x=>x.id===provider);
+  if(!key && !(p && p.hasKey)){ toast("Paste a key for this provider first", true); return; }
+  try{
+    if(key){
+      const res=await fetch("/api/key",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key, provider})}).then(r=>r.json());
+      if(!res.hasKey){ toast("Key not accepted", true); return; }
+      if(res.models){
+        if(p){ p.models=res.models; p.chosen=res.models[0]; p.live=(res.modelSource==="live"); }
+        populateModels(provider);
+        if(res.modelSource!=="live" && res.modelError) toast("Key saved, but live model fetch failed: "+res.modelError, true);
+        if(model && !res.models.includes(model)) model="";
+      }
+    }
+    if(model){ await fetch("/api/model",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({provider, model})}); }
+  }catch(e){ toast("Couldn't reach the local server", true); return; }
+  closeScrim("settingsScrim");
+  $("#keyInput").value="";
+  toast("Saved"+(model?` · model: ${model.split("/").pop()}`:""));
+  init();
+};
+
+/* interface size slider */
+$("#scaleSlider").addEventListener("input", e=>applyScale((+e.target.value)/100));
+$("#scaleReset").onclick=()=>{ applyScale(1); toast("Interface size reset to 100%"); };
+
+/* ============================ new game ============================ */
+$("#newBtn").onclick=()=>{
+  state.messages=[]; state.code=null; state.name="game"; state.pendingRelease=false; state.lastError=null;
+  state.intakeDone=false; state.intakeAnswers={}; state.attachments=[]; state.hasRun=false; renderAttachments();
+  setVersion("testing");
+  $("#thread").innerHTML=""; $("#codeFile").textContent="no draft yet"; $("#fileName").textContent="untitled.py";
+  $("#codeBody").innerHTML=`<div class="empty"><img src="/assets/icon.svg" alt=""><h2>Nothing on the anvil yet</h2><p>Describe a 2D game on the left to begin — we'll agree on it, then I'll forge a playable build you can launch right here.</p>`
+    +`<div class="starters-h">try one — tap to load it</div><div class="starters">`
+    +`<button class="starter" data-fill="A fast top-down arena shooter: I'm a little ship, waves of enemies close in, WASD to move and mouse to aim and shoot, score, drops/power-ups, and it ramps up the longer I survive. Make it work with keyboard+mouse on desktop and on-screen touch controls too.">top-down shooter</button>`
+    +`<button class="starter" data-fill="A side-scrolling platformer: run, jump and double-jump, dodge spikes and patrolling enemies, collect coins, reach the flag. Hand-build three levels that get harder, with a short line of story between them. Keyboard on desktop, touch controls on the phone.">platformer</button>`
+    +`<button class="starter" data-fill="A cozy story RPG, top-down: a small village I can walk around, NPCs I can talk to with branching dialogue, two or three quests, an inventory, a couple of areas to explore, and a save file. Give it real writing and a little lore — go deep, not a stub.">story RPG</button>`
+    +`<button class="starter" data-fill="A falling-block puzzle game like Tetris: pieces fall, rotate and drop them, clear full lines, speed rises as I score, with a next-piece preview and a high-score table. Keyboard on desktop, tap/swipe controls on the phone.">block puzzle</button>`
+    +`</div></div>`;
+  $("#console").innerHTML=`<span class="placeholder">Launch output appears here.</span>`;
+  $("#args").value=""; showStop(null);
+  state.prevCode=null; state.sessionId=null;
+  ["copyBtn","saveBtn","runBtn","releaseBtn","fixLogBtn","polishBtn","dlLogBtn","clearLogBtn",
+   "editBtn","diffBtn","depsBtn","libSaveBtn","reviewBtn","buildBtn"].forEach(id=>$("#"+id).disabled=true);
+  greet();
+  updateSteps();
+};
+
+/* ============================ utils ============================ */
+function esc(s){ return String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function escapeHtml(s){ return esc(s); }
+function fmtError(res){
+  if(res.error==="context_overflow") return "⚠ "+(res.detail||"This conversation got too long for the model. Start a new game (＋ new game) to reset — your library is safe.");
+  return "⚠ "+(res.detail?res.error+" — "+res.detail:res.error);
+}
+let toastT;
+function toast(msg, bad){
+  const el=$("#toast"); el.textContent=msg;
+  el.style.borderLeftColor=bad?"var(--red)":"var(--lime)";
+  el.classList.add("show"); clearTimeout(toastT);
+  toastT=setTimeout(()=>el.classList.remove("show"), 2600);
+}
+</script>
+</body>
+</html>

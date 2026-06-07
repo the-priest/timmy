@@ -1,0 +1,43 @@
+# python
+__pycache__/
+*.py[cod]
+*.pyo
+*.so
+.Python
+
+# venvs
+.venv/
+venv/
+env/
+
+# pyinstaller artefacts
+build/
+dist/
+*.spec
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# secrets / state
+.env
+*.key
+config.json
+
+# logs
+*.log
+
+# user-dropped sound files (the folder and README stay, the audio doesn't)
+sounds/*.mp3
+sounds/*.wav
+sounds/*.ogg
+sounds/*.m4a
+sounds/*.flac
+sounds/*.aac
+sounds/*.oga
+!sounds/README.md
+!sounds/.gitkeep
