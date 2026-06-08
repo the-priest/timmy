@@ -94,7 +94,10 @@ The flow is four steps, shown along the top of the workspace:
 **Building & iterating**
 - Conversational build, or tap-to-pick intake (genre, scope, story depth, target device).
 - **pygame** by default — SDL2 under the hood, so the same game runs on X11 and Wayland.
-- **Playable** vs **release** versions, tracked with a badge.
+- **Playable** vs **release** build stages, plus a numeric version that auto-bumps
+  (`1.0 → 1.1 → 1.2 …`) every time the game changes — shown on a badge and saved with it.
+- **Auto-named**: the game takes its title from the window caption the model sets (click the
+  title in the top bar to rename it yourself), and that name drives the file and the repo.
 - **Auto-test**: after each build it silently imports/launches the game and fixes startup
   failures for up to 3 rounds before handing it back.
 - **⮐ Send log to AI & fix** — diagnose and repair straight from the run output.
@@ -145,8 +148,9 @@ The flow is four steps, shown along the top of the workspace:
   notes, JSON, CSV, etc. as context for what to build or fix.
 
 **Polish**
-- Optional sound cues: drop `startup`, `done`, and `build` audio files into
-  `~/.local/share/timmy/sounds/` and they play on those events.
+- Sound cues out of the box: short chimes play when Timmy opens, when a game lands in the
+  editor, and when a build finishes. Override any of them by dropping your own `startup`,
+  `done`, or `build` audio file into `~/.local/share/timmy/sounds/` (see that folder's README).
 
 ---
 

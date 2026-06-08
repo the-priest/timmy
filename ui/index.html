@@ -85,8 +85,14 @@
   .tool-chip{display:flex;align-items:center;gap:9px;padding:5px 11px;border-radius:8px;
     background:var(--panel);border:1px solid var(--line);font-family:var(--mono);font-size:12px}
   .tool-chip .fn{color:var(--steel)}
+  .tool-chip .gtitle{color:var(--ink);font-family:var(--ui);font-weight:600;font-size:12.5px;
+    max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text;
+    border-bottom:1px dashed transparent;transition:.13s}
+  .tool-chip .gtitle:hover{border-bottom-color:var(--steel);color:var(--amber)}
   .badge{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;font-weight:700;
     padding:3px 7px;border-radius:5px;text-transform:uppercase}
+  .badge.ver{background:rgba(110,170,255,.14);color:#8fb6ff;border:1px solid rgba(110,170,255,.32);
+    letter-spacing:.06em}
   .badge.testing{background:rgba(232,163,61,.14);color:var(--amber);border:1px solid rgba(232,163,61,.3)}
   .badge.release{background:rgba(159,224,74,.14);color:var(--lime);border:1px solid rgba(159,224,74,.3)}
   .spacer{flex:1}
@@ -583,11 +589,13 @@
   <div class="top">
     <div class="logo">
       <img src="/assets/icon.svg" alt="">
-      <span class="name"><b>The</b>Dawg</span>
+      <span class="name"><b>Tim</b>my</span>
     </div>
     <div class="tool-chip">
+      <span class="gtitle" id="gameTitle" title="Click to rename the game">Untitled Game</span>
       <span class="fn" id="fileName">untitled.py</span>
-      <span class="badge testing" id="verBadge">testing</span>
+      <span class="badge ver" id="verNum" title="Bumps every time the game changes">v1.0</span>
+      <span class="badge testing" id="verBadge" title="Build stage">testing</span>
     </div>
     <div class="spacer"></div>
     <select id="providerPick" class="provider-pick" title="Which model builds your games"></select>
@@ -664,10 +672,11 @@
             <div class="steps"><span>1 · agree</span><span>2 · play</span><span>3 · iterate</span><span>4 · release</span></div>
             <div class="starters-h">try one — tap to load it</div>
             <div class="starters">
-              <button class="starter" data-fill="A fast top-down arena shooter: I'm a little ship, waves of enemies close in, WASD to move and mouse to aim and shoot, score, drops/power-ups, and it ramps up the longer I survive. Make it work with keyboard+mouse on desktop and on-screen touch controls too.">top-down shooter</button>
-              <button class="starter" data-fill="A side-scrolling platformer: run, jump and double-jump, dodge spikes and patrolling enemies, collect coins, reach the flag. Hand-build three levels that get harder, with a short line of story between them. Keyboard on desktop, touch controls on the phone.">platformer</button>
-              <button class="starter" data-fill="A cozy story RPG, top-down: a small village I can walk around, NPCs I can talk to with branching dialogue, two or three quests, an inventory, a couple of areas to explore, and a save file. Give it real writing and a little lore — go deep, not a stub.">story RPG</button>
-              <button class="starter" data-fill="A falling-block puzzle game like Tetris: pieces fall, rotate and drop them, clear full lines, speed rises as I score, with a next-piece preview and a high-score table. Keyboard on desktop, tap/swipe controls on the phone.">block puzzle</button>
+              <button class="starter" data-fill="A fast top-down arena shooter: I'm a little ship, waves of enemies close in, WASD to move and mouse to aim and shoot, score, drops/power-ups, screen shake and particles, and it ramps up the longer I survive. Keyboard+mouse on desktop and on-screen touch controls too. Give it a name and a neon look.">top-down shooter</button>
+              <button class="starter" data-fill="A side-scrolling platformer with real game feel: run, jump and double-jump with coyote time and a satisfying landing, dodge spikes and patrolling enemies, collect coins, reach the flag. Hand-build three levels that get harder, with a short line of story between them. Keyboard on desktop, touch on the phone. Pick a cohesive palette.">platformer</button>
+              <button class="starter" data-fill="A cozy story RPG, top-down: a small village I can walk around, NPCs with branching dialogue and typewriter text, two or three quests, an inventory, a couple of areas to explore, and a save file. Give it real writing and a little lore — go deep, not a stub.">story RPG</button>
+              <button class="starter" data-fill="A falling-block puzzle like Tetris: pieces fall, rotate and drop, clear full lines with a juicy flash, speed rises as I score, next-piece preview and a high-score table. Keyboard on desktop, tap/swipe on the phone.">block puzzle</button>
+              <button class="starter" data-fill="Surprise me — invent a bold, original 2D game I wouldn't have thought of. Pick the genre, the hook, the art style and a great name, make it juicy and complete, and build it for both keyboard and touch. Tell me what you chose and why.">✨ surprise me</button>
             </div>
           </div>
         </div>
@@ -855,7 +864,8 @@ document.addEventListener("keydown", e=>{
 
 /* ============================ app state ============================ */
 let state = {
-  messages: [], code: null, name: "game", version: "testing",
+  messages: [], code: null, name: "game", title: "Untitled Game", version: "testing",
+  ver: "1.0", verNum: 0, everBuilt: false, titleLocked: false,
   busy: false, pendingRelease: false, intakeDone: false, intakeAnswers: {},
   prevCode: null, sessionId: null, attachments: [], lastError: null, hasRun: false,
   ghUser: "", ghHolder: "", _panelTab: "sessions", _intakeQs: null, _followupEl: null,
@@ -898,7 +908,9 @@ function loadCodeFile(fname, text){
     {role:"user", content:`I'm bringing in an existing file "${fname}" to work on:\n\`\`\`python\n${text}\n\`\`\``},
     {role:"assistant", content:"Loaded your file into the workspace. Tell me what to debug, fix, improve, or turn into a GUI — or just hit Run."}
   ];
-  state.name=(fname.replace(/\.[^.]+$/,"")||"loaded").replace(/[^A-Za-z0-9_\-]/g,"_");
+  state.name=slugify((fname.replace(/\.[^.]+$/,"")||"loaded"));
+  state.title=prettify(state.name);
+  state.titleLocked=false; state.everBuilt=true; state.verNum=0; state.ver="1.0";
   state.intakeDone=true; state.prevCode=null; state.sessionId=null;
   $("#thread").innerHTML="";
   addMsg("you", `Loaded: ${fname} (${lines} lines)`);
@@ -984,9 +996,10 @@ async function loadSounds(){
 }
 let _startupPending=false;   // set if the boot-time startup sound got autoplay-blocked
 function playSound(which){
-  const a=SOUNDS[which]; if(!a) return;
+  const base=SOUNDS[which]; if(!base) return;
   try{
-    a.pause(); a.currentTime=0;
+    // clone per-play so rapid iterations layer instead of cutting the previous one off
+    const a=base.cloneNode(true); a.volume=(base.volume!=null)?base.volume:0.85;
     const p=a.play();
     if(p&&p.catch) p.catch(()=>{ if(which==="startup") _startupPending=true; });
   }catch(_){ if(which==="startup") _startupPending=true; }
@@ -1188,12 +1201,13 @@ async function converse(){
   const hadCode=!!code;
   if(code){
     loadCode(code);
+    bumpVersion();
     if(state.pendingRelease){ setVersion("release"); state.pendingRelease=false; } else setVersion("testing");
     playSound("done");
   }
   let flag=null;
   if(hadCode){
-    flag=`${state.name}.py updated · ${state.version} version`;
+    flag=`${state.title} v${state.ver} · ${state.version} build`;
     const at=res.autotest;
     if(at && at.ran){
       const rounds=(at.rounds||[]).length;
@@ -1246,9 +1260,8 @@ document.addEventListener("click", e=>{
 
 /* ============================ code pane ============================ */
 function loadCode(code){
-  state.prevCode=state.code; state.code=code; guessName(code);
-  $("#codeFile").textContent=state.name+".py";
-  $("#fileName").textContent=state.name+".py";
+  state.prevCode=state.code; state.code=code; deriveName(code);
+  paintNames();
   renderCode(code);
   ["copyBtn","saveBtn","runBtn","releaseBtn","fixLogBtn","polishBtn","dlLogBtn","clearLogBtn",
    "editBtn","depsBtn","libSaveBtn","reviewBtn","buildBtn"].forEach(id=>$("#"+id).disabled=false);
@@ -1264,15 +1277,62 @@ function autosaveSession(){
     try{
       const r=await fetch("/api/session/save",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({id:state.sessionId, name:state.name, code:state.code, messages:state.messages,
-          version:state.version, args:$("#args").value.trim()})}).then(r=>r.json());
+          version:state.version, ver:state.ver, args:$("#args").value.trim()})}).then(r=>r.json());
       if(r.id) state.sessionId=r.id;
     }catch(e){}
   }, 800);
 }
-function guessName(code){
-  let m=code.match(/add_parser\(['"]([a-z0-9_\-]+)/i) || code.match(/prog=['"]([a-z0-9_\-]+)/i) || code.match(/def\s+([a-z0-9_]{3,})\s*\(/i);
-  if(m) state.name=m[1].replace(/[^a-z0-9_\-]/gi,"_");
+function slugify(s){
+  return (String(s||"").trim().toLowerCase()
+            .replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"")) || "game";
 }
+function prettify(s){
+  return (String(s||"").replace(/[_\-]+/g," ").replace(/\s+/g," ").trim()
+            .replace(/\b\w/g,c=>c.toUpperCase())) || "Untitled Game";
+}
+// The game's REAL name is the window caption the model sets — far better than a
+// random function name. Pull it from set_caption(...) (pygame), open_window(...,"title")
+// (arcade), or a TITLE/GAME_TITLE constant. Generic placeholders are ignored.
+function deriveName(code){
+  if(state.titleLocked) return;
+  const m = code.match(/set_caption\(\s*["']([^"'\n]{1,60})["']/)
+         || code.match(/open_window\(\s*[^,]+,\s*[^,]+,\s*["']([^"'\n]{1,60})["']/)
+         || code.match(/\b(?:GAME_TITLE|GAME_NAME|TITLE|CAPTION)\s*=\s*["']([^"'\n]{1,60})["']/);
+  if(!m) return;
+  const title=m[1].trim().replace(/\s+/g," ");
+  if(!title || /^(game|untitled|untitled game|my game|window|window title|title|pygame|app|main)$/i.test(title)) return;
+  state.title=title; state.name=slugify(title);
+}
+function paintNames(){
+  $("#codeFile").textContent=state.code?state.name+".py":"no draft yet";
+  $("#fileName").textContent=state.code?state.name+".py":"untitled.py";
+  const gt=$("#gameTitle"); if(gt) gt.textContent=state.title||"Untitled Game";
+  paintVer();
+}
+
+/* numeric game version: 1.0 -> 1.1 -> … -> 1.9 -> 2.0, bumped on every change */
+function verString(n){ n=Math.max(0, n|0); return (1+Math.floor(n/10))+"."+(n%10); }
+function parseVer(s){ const m=/^(\d+)\.(\d+)$/.exec(String(s||"")); return m?Math.max(0,(parseInt(m[1],10)-1)*10+parseInt(m[2],10)):0; }
+function setVerNum(n){ state.verNum=Math.max(0,n); state.ver=verString(state.verNum); paintVer(); }
+function paintVer(){ const b=$("#verNum"); if(b) b.textContent="v"+state.ver; }
+function bumpVersion(){
+  if(!state.everBuilt){ state.everBuilt=true; setVerNum(0); }   // first build  -> 1.0
+  else setVerNum(state.verNum+1);                                // each change  -> +0.1
+}
+
+/* click the title to rename the game (locks it so rebuilds don't override your name) */
+function wireRename(){
+  const gt=$("#gameTitle"); if(!gt || gt._wired) return; gt._wired=true;
+  gt.onclick=()=>{
+    const v=prompt("Name this game:", state.title||"");
+    if(v===null) return;
+    const t=v.trim(); if(!t) return;
+    state.title=t; state.name=slugify(t); state.titleLocked=true;
+    paintNames(); autosaveSession();
+    toast(`Renamed to "${t}"`);
+  };
+}
+wireRename();
 function renderCode(code){
   const body=$("#codeBody"); body.innerHTML="";
   const pre=document.createElement("pre"); pre.className="code";
@@ -1351,9 +1411,11 @@ $("#editSave").onclick=()=>{
   const v=$("#codeEdit").value;
   state.prevCode=state.code; state.code=v;
   $("#editBar").style.display="none"; renderCode(v); $("#diffBtn").disabled=false;
+  deriveName(v); bumpVersion(); paintNames();
   state.messages.push({role:"assistant", content:"```python\n"+v+"\n```"});
   state.messages.push({role:"user", content:"(I manually edited the code above — treat that as the current version.)"});
-  toast("Edits applied — model is in sync");
+  playSound("done");
+  toast(`Edits applied — ${state.title} v${state.ver}`);
 };
 
 /* ============================ deps ============================ */
@@ -1383,10 +1445,10 @@ $("#libSaveBtn").onclick=async ()=>{
   if(!state.code){ toast("Nothing to save yet", true); return; }
   let r;
   try{ r=await fetch("/api/library/save",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({name:state.name, code:state.code, messages:state.messages, version:state.version, args:$("#args").value.trim(), sessionId:state.sessionId})}).then(r=>r.json()); }
+    body:JSON.stringify({name:state.name, code:state.code, messages:state.messages, version:state.version, ver:state.ver, args:$("#args").value.trim(), sessionId:state.sessionId})}).then(r=>r.json()); }
   catch(e){ toast("Couldn't reach the local server", true); return; }
   if(r && r.error){ toast("⚠ "+r.error, true); return; }
-  toast(`Saved "${state.name}" to library — its state is banked`);
+  toast(`Saved "${state.title}" v${state.ver} to library — its state is banked`);
 };
 $("#libBtn").onclick=()=>openPanel(state._panelTab||"sessions");
 $("#libClose").onclick=()=>$("#libPanel").classList.remove("on");
@@ -1407,7 +1469,7 @@ async function renderSessions(){
   $("#libBody").innerHTML=ss.map(s=>`
     <div class="lib-item" data-id="${s.id}">
       <div class="nm">${escapeHtml(s.name)}${s.toolkit?` <span class="tk">${escapeHtml(s.toolkit)}</span>`:""}</div>
-      <div class="meta">${s.turns} turns · ${s.hasCode?"has code":"no code yet"} · ${escapeHtml(s.updated||"")}</div>
+      <div class="meta">${s.hasCode?`v${escapeHtml(s.ver||"1.0")} · `:""}${s.turns} turns · ${s.hasCode?"has code":"no code yet"} · ${escapeHtml(s.updated||"")}</div>
       <div class="row"><span class="open">resume ▸</span><span class="del" data-id="${s.id}">delete</span></div>
     </div>`).join("");
   $("#libBody").querySelectorAll(".lib-item").forEach(el=>{
@@ -1423,17 +1485,18 @@ async function resumeSession(id){
   catch(e){ toast("Couldn't load", true); return; }
   if(r.error){ toast(r.error, true); return; }
   const s=r.session;
-  state.messages=s.messages||[]; state.name=s.name||s.id; state.sessionId=s.id;
+  state.messages=s.messages||[]; state.name=s.name||s.id; state.title=prettify(s.name||s.id); state.sessionId=s.id;
+  state.titleLocked=false; state.everBuilt=!!s.code; state.verNum=parseVer(s.ver); state.ver=verString(state.verNum);
   state.intakeDone=true; state.prevCode=null; state.attachments=[]; state.hasRun=false; renderAttachments();
   $("#thread").innerHTML="";
   (s.messages||[]).forEach(m=>{
     if(m.role==="user") addMsg("you", m.content.replace(/```[\s\S]*?```/g,"[code]"));
     else if(m.role==="assistant"){ const {prose}=splitReply(m.content); if(prose) addMsg("smith", prose); }
   });
-  if(s.code){ loadCode(s.code); setVersion(s.version||"testing"); }
+  if(s.code){ loadCode(s.code); setVersion(s.version||"testing"); } else paintNames();
   $("#args").value=s.args||"";
   $("#libPanel").classList.remove("on");
-  toast(`Resumed "${s.name}"`);
+  toast(`Resumed "${state.title}" v${state.ver}`);
 }
 async function renderLibrary(){
   let r;
@@ -1443,7 +1506,7 @@ async function renderLibrary(){
   $("#libBody").innerHTML=tools.map(t=>`
     <div class="lib-item" data-id="${t.id}">
       <div class="nm">${escapeHtml(t.name)}${t.toolkit?` <span class="tk">${escapeHtml(t.toolkit)}</span>`:""}</div>
-      <div class="meta">${t.lines} lines · ${escapeHtml(t.version||"testing")} · saved ${escapeHtml(t.saved||"")}</div>
+      <div class="meta">${t.lines} lines · v${escapeHtml(t.ver||"1.0")} · ${escapeHtml(t.version||"testing")} · saved ${escapeHtml(t.saved||"")}</div>
       <div class="row"><span class="open">open ▸</span><span class="del" data-id="${t.id}">delete</span></div>
     </div>`).join("");
   $("#libBody").querySelectorAll(".lib-item").forEach(el=>{
@@ -1460,14 +1523,15 @@ async function loadFromLibrary(id){
   catch(e){ toast("Couldn't load", true); return; }
   if(r.error){ toast("Couldn't load: "+r.error, true); return; }
   const tool=r.tool;
-  state.messages=tool.messages||[]; state.name=tool.name||tool.id; state.intakeDone=true; state.prevCode=null;
+  state.messages=tool.messages||[]; state.name=tool.name||tool.id; state.title=prettify(tool.name||tool.id); state.intakeDone=true; state.prevCode=null;
   state.sessionId=null; state.attachments=[]; state.hasRun=false; renderAttachments();
+  state.titleLocked=false; state.everBuilt=!!tool.code; state.verNum=parseVer(tool.ver); state.ver=verString(state.verNum);
   $("#thread").innerHTML="";
   (tool.messages||[]).forEach(m=>{
     if(m.role==="user") addMsg("you", m.content.replace(/```[\s\S]*?```/g,"[code]"));
     else if(m.role==="assistant"){ const {prose}=splitReply(m.content); if(prose) addMsg("smith", prose); }
   });
-  addMsg("smith", `Loaded "${tool.name}" from the library at its saved ${tool.version||"testing"} state — conversation, code and args restored. Keep iterating where you left off.`);
+  addMsg("smith", `Loaded "${state.title}" v${state.ver} from the library at its saved ${tool.version||"testing"} state — conversation, code and args restored. Keep iterating where you left off.`);
   loadCode(tool.code); setVersion(tool.version||"testing");
   $("#args").value=tool.args||"";
   $("#libPanel").classList.remove("on");
@@ -1505,7 +1569,7 @@ $("#ghGenerate").onclick=async ()=>{
   }catch(e){ rel={error:"server"}; }
   if(rel.error){ toast("⚠ "+rel.error, true); resetGhBtn(); return; }
   const {code:relCode}=splitReply(rel.reply);
-  if(relCode){ loadCode(relCode); setVersion("release"); state.messages.push({role:"assistant",content:rel.reply}); }
+  if(relCode){ loadCode(relCode); bumpVersion(); setVersion("release"); state.messages.push({role:"assistant",content:rel.reply}); }
   const finalCode=relCode||state.code;
   $("#ghGenerate").textContent="assembling repo…";
   let gh;
@@ -1526,7 +1590,7 @@ function showGhResult(w){
   $("#ghInstall").textContent=w.install_line_posix||w.install_line||"";
   $("#ghPush").textContent=(w.push||[]).join("\n");
   $("#ghPath").textContent=w.path||"";
-  addMsg("smith", `GitHub repo assembled at ${w.path}. The README has the one-line Linux installer, and the push commands are in the dialog — HTTPS remote, as you wanted.`, `${state.name} · release + repo files`);
+  addMsg("smith", `GitHub repo assembled at ${w.path}. The README has the one-line Linux installer, and the push commands are in the dialog — HTTPS remote, as you wanted.`, `${state.title} v${state.ver} · release + repo files`);
 }
 $("#ghCopyInstall").onclick=()=>{ navigator.clipboard.writeText($("#ghInstall").textContent); toast("Linux install line copied"); };
 $("#ghCopyPush").onclick=()=>{ navigator.clipboard.writeText($("#ghPush").textContent); toast("Push commands copied"); };
@@ -1542,7 +1606,7 @@ $("#buildBtn").onclick=async ()=>{
   const note=(d.pip && d.pip.length)?`\n\nWill pip-install into Timmy's managed venv first:\n  ${d.pip.join("\n  ")}\n`:"";
   if(!confirm(`Build a single-file executable for THIS OS with PyInstaller?${note}\n\nThis can take a couple of minutes the first time.`)) return;
   const btn=$("#buildBtn"); const orig=btn.textContent; btn.disabled=true; btn.textContent="⬛ building…";
-  addMsg("smith", `🎮 Packing ${state.name} into a standalone executable with PyInstaller — first run installs the toolchain into the managed venv, so give it a minute.`);
+  addMsg("smith", `🎮 Packing ${state.title} v${state.ver} into a standalone executable with PyInstaller — first run installs the toolchain into the managed venv, so give it a minute.`);
   toast("Building executable — this may take a minute…");
   let r;
   try{ r=await fetch("/api/build",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:state.code, name:state.name, console:wantConsole})}).then(r=>r.json()); }
@@ -1558,7 +1622,7 @@ $("#buildBtn").onclick=async ()=>{
 async function save(){
   if(!state.code) return;
   let res;
-  try{ res=await fetch("/api/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:state.code, name:state.name, kind:state.version})}).then(r=>r.json()); }
+  try{ res=await fetch("/api/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:state.code, name:state.name, kind:state.version, ver:state.ver})}).then(r=>r.json()); }
   catch(e){ toast("Couldn't reach the local server", true); return; }
   if(res.error){ toast("⚠ "+res.error, true); return; }
   toast("Saved → "+res.path);
@@ -1635,9 +1699,9 @@ $("#polishBtn").onclick=async ()=>{
     if(res.error){ addMsg("smith","⚠ "+res.error); break; }
     const {prose, code}=splitReply(res.reply);
     if(!code){ $("#polishStatus").textContent="stopped — model returned no code"; break; }
-    loadCode(code); setVersion("testing");
+    loadCode(code); bumpVersion(); setVersion("testing");
     state.messages.push({role:"assistant", content:res.reply});
-    addMsg("smith", prose||"Polished a round.", `${state.name}.py · polish round ${round}`);
+    addMsg("smith", prose||"Polished a round.", `${state.title} v${state.ver} · polish round ${round}`);
     await run(true);
     if(round>=6){ $("#polishStatus").textContent="stopped — hit 6-round safety cap"; break; }
   }
@@ -1658,7 +1722,7 @@ function applyModelResult(res, introIfProse){
   $("#modelName").textContent=res.model||$("#modelName").textContent; reflectKey(true);
   const {prose, code}=splitReply(res.reply);
   let flag=null;
-  if(code){ loadCode(code); setVersion("testing"); flag=`${state.name}.py updated`; const at=res.autotest; if(at && at.ran) flag+=at.passed?"  ·  ✓ auto-tested":"  ·  ⚠ check still failing"; }
+  if(code){ loadCode(code); bumpVersion(); setVersion("testing"); flag=`${state.title} v${state.ver} updated`; const at=res.autotest; if(at && at.ran) flag+=at.passed?"  ·  ✓ auto-tested":"  ·  ⚠ check still failing"; }
   addMsg("smith", prose||introIfProse||"Done.", flag);
   state.messages.push({role:"assistant", content:res.reply});
 }
@@ -1736,16 +1800,19 @@ $("#scaleReset").onclick=()=>{ applyScale(1); toast("Interface size reset to 100
 
 /* ============================ new game ============================ */
 $("#newBtn").onclick=()=>{
-  state.messages=[]; state.code=null; state.name="game"; state.pendingRelease=false; state.lastError=null;
+  state.messages=[]; state.code=null; state.name="game"; state.title="Untitled Game"; state.pendingRelease=false; state.lastError=null;
+  state.titleLocked=false; state.everBuilt=false; state.verNum=0; state.ver="1.0";
   state.intakeDone=false; state.intakeAnswers={}; state.attachments=[]; state.hasRun=false; renderAttachments();
   setVersion("testing");
   $("#thread").innerHTML=""; $("#codeFile").textContent="no draft yet"; $("#fileName").textContent="untitled.py";
+  const _gt=$("#gameTitle"); if(_gt) _gt.textContent="Untitled Game"; paintVer();
   $("#codeBody").innerHTML=`<div class="empty"><img src="/assets/icon.svg" alt=""><h2>Nothing on the anvil yet</h2><p>Describe a 2D game on the left to begin — we'll agree on it, then I'll forge a playable build you can launch right here.</p>`
     +`<div class="starters-h">try one — tap to load it</div><div class="starters">`
-    +`<button class="starter" data-fill="A fast top-down arena shooter: I'm a little ship, waves of enemies close in, WASD to move and mouse to aim and shoot, score, drops/power-ups, and it ramps up the longer I survive. Make it work with keyboard+mouse on desktop and on-screen touch controls too.">top-down shooter</button>`
-    +`<button class="starter" data-fill="A side-scrolling platformer: run, jump and double-jump, dodge spikes and patrolling enemies, collect coins, reach the flag. Hand-build three levels that get harder, with a short line of story between them. Keyboard on desktop, touch controls on the phone.">platformer</button>`
-    +`<button class="starter" data-fill="A cozy story RPG, top-down: a small village I can walk around, NPCs I can talk to with branching dialogue, two or three quests, an inventory, a couple of areas to explore, and a save file. Give it real writing and a little lore — go deep, not a stub.">story RPG</button>`
-    +`<button class="starter" data-fill="A falling-block puzzle game like Tetris: pieces fall, rotate and drop them, clear full lines, speed rises as I score, with a next-piece preview and a high-score table. Keyboard on desktop, tap/swipe controls on the phone.">block puzzle</button>`
+    +`<button class="starter" data-fill="A fast top-down arena shooter: I'm a little ship, waves of enemies close in, WASD to move and mouse to aim and shoot, score, drops/power-ups, screen shake and particles, and it ramps up the longer I survive. Keyboard+mouse on desktop and on-screen touch controls too. Give it a name and a neon look.">top-down shooter</button>`
+    +`<button class="starter" data-fill="A side-scrolling platformer with real game feel: run, jump and double-jump with coyote time and a satisfying landing, dodge spikes and patrolling enemies, collect coins, reach the flag. Hand-build three levels that get harder, with a short line of story between them. Keyboard on desktop, touch on the phone. Pick a cohesive palette.">platformer</button>`
+    +`<button class="starter" data-fill="A cozy story RPG, top-down: a small village I can walk around, NPCs with branching dialogue and typewriter text, two or three quests, an inventory, a couple of areas to explore, and a save file. Give it real writing and a little lore — go deep, not a stub.">story RPG</button>`
+    +`<button class="starter" data-fill="A falling-block puzzle like Tetris: pieces fall, rotate and drop, clear full lines with a juicy flash, speed rises as I score, next-piece preview and a high-score table. Keyboard on desktop, tap/swipe on the phone.">block puzzle</button>`
+    +`<button class="starter" data-fill="Surprise me — invent a bold, original 2D game I wouldn't have thought of. Pick the genre, the hook, the art style and a great name, make it juicy and complete, and build it for both keyboard and touch. Tell me what you chose and why.">✨ surprise me</button>`
     +`</div></div>`;
   $("#console").innerHTML=`<span class="placeholder">Launch output appears here.</span>`;
   $("#args").value=""; showStop(null);

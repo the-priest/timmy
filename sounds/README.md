@@ -1,35 +1,34 @@
 # sounds
 
-Drop audio files here and Timmy plays them at three moments:
+Timmy plays a short chime at three moments. **It ships with default sounds, so this
+works out of the box** — but every one is overridable by dropping your own file here.
 
-| Drop this file       | Plays when                                    |
-|----------------------|-----------------------------------------------|
-| `startup.mp3`        | Timmy opens                                 |
-| `done.mp3`           | The model lands a finished tool in the editor |
-| `build.mp3`          | ⬛ build finishes successfully                |
+| File          | Plays when                                       | Ships by default |
+|---------------|--------------------------------------------------|:----------------:|
+| `startup.*`   | Timmy opens                                      | ✅ `startup.ogg` |
+| `done.*`      | the model lands a finished game in the editor    | ✅ `done.ogg`    |
+| `build.*`     | a ⬛ build finishes successfully                  | ✅ `build.ogg`   |
+
+## Overriding a sound
+
+- **Drop a file named exactly `startup`, `done`, or `build`** with one of these
+  extensions: `.mp3`, `.wav`, `.ogg`, `.m4a`, `.flac`. Your file **wins over the
+  default** for that trigger — Timmy checks `.mp3` → `.wav` → `.ogg` → `.m4a` →
+  `.flac` and uses the first it finds, and the bundled defaults are `.ogg`, so a
+  `done.mp3` you drop in beats the shipped `done.ogg`.
+- **Want silence on a trigger?** Delete that default `.ogg` (e.g. `rm done.ogg`) and
+  don't replace it — that trigger goes quiet, no errors, no nags.
+- Your own audio files are **not** committed (`.gitignore` ignores everything here
+  except the three shipped `.ogg` defaults and these docs).
 
 ## Notes
 
-- **Filename is what matters** — the file *must* be called exactly `startup`,
-  `done`, or `build`, with one of these extensions: `.mp3`, `.wav`, `.ogg`,
-  `.m4a`, `.flac`. The first match wins, so if you drop both `done.mp3` and
-  `done.wav`, the mp3 plays.
-- **It's safe to leave any of them empty.** If a file isn't here, that trigger
-  is silent — no errors, no nags.
-- **Autoplay**: the launcher passes `--autoplay-policy=no-user-gesture-required`
-  to Chromium-family browsers, so the startup sound plays even before you've
-  clicked anything. If you ever launch Timmy in a plain Firefox tab, the
-  startup sound may stay quiet until you click somewhere — that's a browser
-  policy, not a Timmy bug.
-- **Volume / overlap**: 85% by default. Sounds are cloned per-play so rapid
-  iterations don't cut off the previous one.
-- **Size**: keep them short. A few seconds is great. Multi-minute files will
-  hammer your nerves *and* your bandwidth.
-- **Reload**: Timmy reads this directory at boot and after a page refresh
-  (Ctrl/Cmd+R). If you drop in new files while it's running, just refresh.
-- **.gitignore**: this folder's audio files aren't tracked — only this README is.
-
-## Where to get sounds
-
-You make them, you find them online, you record yourself yelling "DAEDALUS" into
-your mic for `done.mp3`. Whatever fits. No defaults are shipped.
+- **Autoplay**: the launcher passes `--autoplay-policy=no-user-gesture-required` to
+  Chromium-family browsers, so the startup sound plays even before you click. In a
+  plain Firefox tab it may wait for your first click — that's a browser policy, not a
+  Timmy bug; Timmy fires the queued startup chime on that first interaction.
+- **Volume / overlap**: 85% by default. Each play is cloned, so rapid iterations layer
+  instead of cutting each other off.
+- **Size**: keep replacements short — a second or two. The shipped defaults are ~0.5–1.2s.
+- **Reload**: Timmy reads this directory at boot and on a page refresh (Ctrl/Cmd+R). Drop
+  a new file while it's running, then refresh.
