@@ -24,6 +24,39 @@ local-only Python server. No cloud backend, no telemetry.
 
 ---
 
+## What's new in 1.2.0 — the "actually good at games" release
+
+The generation pipeline was rebuilt around one principle: **no game reaches you
+untested or half-finished.**
+
+- **Headless runtime playtest.** Every build is now actually *run* in a sandbox
+  (SDL dummy drivers — no window opens), piloted with synthetic key / mouse / touch
+  input for several seconds, then sent `QUIT` and required to exit cleanly. Crashes
+  during play, instant exits, and loops that ignore `QUIT` are caught and fed back
+  to the model as real tracebacks **before you ever see the game**. The old check
+  only imported the file, so anything that broke after the window opened got through.
+- **No more truncated games.** Requests now carry an explicit per-model completion
+  budget (`max_tokens` was never sent before, so providers silently cut long games
+  mid-file), and a reply that still gets cut is automatically continued from the
+  exact cut point and stitched back together.
+- **The Timmy kit.** Games are built on a hand-written, runtime-tested engine
+  substrate (delta-time loop, scene machine, pooled particles, screen shake,
+  easing, procedural sfx, an on-screen touch overlay) pasted verbatim into every
+  game — the model writes game logic, not engine plumbing it keeps fumbling.
+- **Design pass + genre craft notes.** Fresh builds first get a compact,
+  authoritative design spec (title, palette, entities, tuned numbers, win/lose,
+  juice list) plus genre-specific requirements (coyote time for platformers,
+  pooled bullets for shooters, ...), and the code pass implements *that*.
+- **Quality gate.** A fresh build that passes every check gets one playtest-critique
+  round; genuine playability gaps (unreachable win, missing touch controls, dead
+  restart) trigger a single improvement pass that's kept only if it also passes.
+- **Analyzer fix.** The static analyzer falsely flagged `self.score = 0` +
+  `self.score += 1` — the most common pattern in any game — as a serious bug,
+  failing correct code and burning fix rounds on non-problems. Fixed; the intended
+  typo catch (`self.valeu += 1` with no init) still works.
+
+---
+
 ## Install
 
 ```

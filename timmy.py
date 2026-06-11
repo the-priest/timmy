@@ -56,7 +56,7 @@ import urllib.error
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # --------------------------------------------------------------------------
@@ -227,12 +227,322 @@ BUILD_TEMPERATURE = 0.22
 # bolder, more surprising, more genre-specific options.
 DESIGN_TEMPERATURE = 0.7
 
+# ---- output budget (v1.2.0) ----
+# The single nastiest silent failure in 1.1.x: no max_tokens was sent, so providers
+# applied their own (often tiny) default completion cap and TRUNCATED whole games
+# mid-file. Now every call asks for a real completion budget, clamped per model.
+MAX_OUTPUT_TOKENS = 16384
+# If a reply still gets cut (finish_reason == "length" or an unterminated code
+# fence), Timmy automatically asks the model to continue from the exact cut point
+# and stitches the parts together, up to this many times.
+CONTINUE_MAX_ROUNDS = 2
+
+# ---- runtime playtest (v1.2.0) ----
+# After the import/static checks pass, actually RUN the game headlessly (SDL dummy
+# video/audio drivers — no window ever opens), pilot it with synthetic key / mouse /
+# touch input for a few seconds, then post QUIT and require a clean exit. Crashes,
+# instant exits, and loops that ignore QUIT are fed back to the model as concrete
+# tracebacks inside the normal auto-test fix rounds.
+RUNTIME_TEST = True
+RUNTIME_PLAY_SECONDS = 7
+RUNTIME_TIMEOUT = 35
+
+# ---- quality gate (v1.2.0) ----
+# On a FRESH build only (never on your iteration requests), once the game passes
+# every check, one extra playtest-critique call looks for genuine playability gaps
+# (unreachable win, missing lose/restart, no touch controls when the phone is a
+# target, spec items plainly missing). If it finds must-fix items, ONE improvement
+# round runs; the improved code is kept only if it passes all checks again.
+QUALITY_PASS = True
+
 HOST = "127.0.0.1"
 PORT = 8765
 
 # This is the heart of it: the model is taught to build COMPLETE, PLAYABLE 2D games the
 # way a careful senior game developer does -- agree first, testing build by default,
 # release only on request. Targets Kali/KDE/X11 (X395) AND the OnePlus 6 on Phosh/Wayland.
+# The Timmy kit (v1.2.0): hand-written, runtime-tested engine substrate that every
+# generated game is built ON instead of re-inventing. The model pastes it verbatim at
+# the top of each game and writes only game logic below it — so the delta-time loop,
+# scene machine, particles, screen shake, easing, touch overlay and procedural sound
+# are solved ONCE, correctly, rather than re-fumbled on every build.
+GAMEKIT = r'''# ======= TIMMY KIT v1 — engine substrate. Paste VERBATIM; do not modify. =======
+import sys, math, random
+
+try:
+    import pygame
+except ImportError:
+    sys.stderr.write("This game needs pygame. Install it with:\n    pip install pygame\n")
+    sys.exit(1)
+
+try:
+    import numpy as _np
+except Exception:
+    _np = None
+
+
+def lerp(a, b, t): return a + (b - a) * t
+def ease_out_cubic(t): return 1 - (1 - t) ** 3
+def ease_in_out(t): return 3 * t * t - 2 * t * t * t
+def clamp(v, lo, hi): return lo if v < lo else hi if v > hi else v
+
+
+class Sound:
+    """Synthesised sfx (numpy + sndarray). Silently does nothing if numpy or the
+    mixer is unavailable — sound must never crash or be required."""
+    def __init__(self):
+        self.ok, self.muted, self._cache = False, False, {}
+        try:
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+            self.ok = _np is not None
+        except Exception:
+            self.ok = False
+
+    def _tone(self, freq, ms, kind="sine", vol=0.4, sweep=0.0):
+        if not self.ok:
+            return None
+        key = (freq, ms, kind, round(vol, 2), round(sweep, 2))
+        if key in self._cache:
+            return self._cache[key]
+        rate = 44100
+        n = int(rate * ms / 1000.0)
+        t = _np.linspace(0, ms / 1000.0, n, endpoint=False)
+        f = freq + sweep * t * (1000.0 / max(ms, 1))
+        if kind == "square":
+            wave = _np.sign(_np.sin(2 * _np.pi * f * t))
+        elif kind == "saw":
+            wave = 2 * (f * t - _np.floor(0.5 + f * t))
+        elif kind == "noise":
+            wave = _np.random.uniform(-1, 1, n)
+        else:
+            wave = _np.sin(2 * _np.pi * f * t)
+        env = _np.minimum(1.0, _np.linspace(1, 0, n) * 3)
+        env *= _np.minimum(1.0, _np.linspace(0, 1, n) * 20)
+        samples = (wave * env * vol * 32767).astype(_np.int16)
+        stereo = _np.repeat(samples.reshape(-1, 1), 2, axis=1)
+        snd = pygame.sndarray.make_sound(_np.ascontiguousarray(stereo))
+        self._cache[key] = snd
+        return snd
+
+    def play(self, name):
+        if not self.ok or self.muted:
+            return
+        table = {"jump":   (520, 130, "square", 0.35, 240),
+                 "land":   (180, 90,  "sine",   0.30, -60),
+                 "hit":    (140, 160, "noise",  0.40, 0),
+                 "pickup": (760, 120, "square", 0.30, 380),
+                 "shoot":  (420, 90,  "saw",    0.25, -180),
+                 "blip":   (660, 60,  "square", 0.25, 0),
+                 "win":    (640, 320, "square", 0.35, 300),
+                 "lose":   (200, 420, "saw",    0.35, -120)}
+        spec = table.get(name)
+        if not spec:
+            return
+        snd = self._tone(*spec)
+        if snd:
+            try: snd.play()
+            except pygame.error: pass  # mixer vanished mid-play: stay silent, never crash
+
+
+class Particles:
+    """Pooled particle system — emit with burst(), never allocate per frame."""
+    def __init__(self, cap=400):
+        self.cap, self.i = cap, 0
+        self.p = [dict(life=0.0) for _ in range(cap)]
+
+    def burst(self, x, y, n=12, color=(255, 255, 255), speed=160, spread=math.pi * 2,
+              angle=0.0, life=0.5, size=3, gravity=320):
+        for _ in range(n):
+            d = self.p[self.i]; self.i = (self.i + 1) % self.cap
+            a = angle + random.uniform(-spread / 2, spread / 2)
+            v = speed * random.uniform(0.4, 1.0)
+            d.update(x=x, y=y, vx=math.cos(a) * v, vy=math.sin(a) * v,
+                     life=life, max=life, color=color, size=size, g=gravity)
+
+    def update(self, dt):
+        for d in self.p:
+            if d["life"] <= 0:
+                continue
+            d["life"] -= dt
+            d["vy"] += d["g"] * dt
+            d["x"] += d["vx"] * dt
+            d["y"] += d["vy"] * dt
+
+    def draw(self, surf, ox=0, oy=0):
+        for d in self.p:
+            if d["life"] <= 0:
+                continue
+            a = max(0.0, d["life"] / d["max"])
+            s = max(1, int(d["size"] * a))
+            try:
+                surf.fill(d["color"], (int(d["x"] - ox), int(d["y"] - oy), s, s))
+            except (TypeError, ValueError): pass  # bad colour from game code: skip the speck
+
+
+class TouchControls:
+    """On-screen d-pad + A/B buttons. Appears on first touch, translates finger
+    input into a held-direction + button API so game code reads keyboard and touch
+    identically. Hit zones are deliberately thumb-sized."""
+    def __init__(self, w, h):
+        self.enabled = False
+        self.dir = [0, 0]
+        self.a_held = self.b_held = False
+        self._touches = {}
+        self._layout(w, h)
+
+    def _layout(self, w, h):
+        self.w, self.h = w, h
+        r = int(min(w, h) * 0.085)
+        self.r = r
+        cx, cy = int(w * 0.16), int(h * 0.74)
+        self.pad = {"L": pygame.Rect(cx - 2 * r, cy - r, r * 2, r * 2),
+                    "R": pygame.Rect(cx, cy - r, r * 2, r * 2),
+                    "U": pygame.Rect(cx - r, cy - 3 * r, r * 2, r * 2),
+                    "D": pygame.Rect(cx - r, cy + r, r * 2, r * 2)}
+        self.btnA = pygame.Rect(int(w * 0.82) - r, int(h * 0.70) - r, r * 2, r * 2)
+        self.btnB = pygame.Rect(int(w * 0.92) - r, int(h * 0.80) - r, r * 2, r * 2)
+
+    def _refresh(self):
+        self.dir = [0, 0]; a = b = False
+        for p in self._touches.values():
+            if self.pad["L"].collidepoint(p): self.dir[0] = -1
+            if self.pad["R"].collidepoint(p): self.dir[0] = 1
+            if self.pad["U"].collidepoint(p): self.dir[1] = -1
+            if self.pad["D"].collidepoint(p): self.dir[1] = 1
+            if self.btnA.collidepoint(p): a = True
+            if self.btnB.collidepoint(p): b = True
+        self.a_held, self.b_held = a, b
+
+    def handle(self, ev):
+        if ev.type == pygame.FINGERDOWN:
+            self.enabled = True
+            self._touches[ev.finger_id] = (int(ev.x * self.w), int(ev.y * self.h))
+        elif ev.type == pygame.FINGERMOTION:
+            if ev.finger_id in self._touches:
+                self._touches[ev.finger_id] = (int(ev.x * self.w), int(ev.y * self.h))
+        elif ev.type == pygame.FINGERUP:
+            self._touches.pop(ev.finger_id, None)
+        self._refresh()
+
+    def draw(self, surf):
+        if not self.enabled:
+            return
+        ov = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
+        for k, rect in self.pad.items():
+            on = ((k == "L" and self.dir[0] < 0) or (k == "R" and self.dir[0] > 0) or
+                  (k == "U" and self.dir[1] < 0) or (k == "D" and self.dir[1] > 0))
+            pygame.draw.rect(ov, (255, 255, 255, 90 if on else 40), rect, border_radius=8)
+        for rect, on in ((self.btnA, self.a_held), (self.btnB, self.b_held)):
+            pygame.draw.circle(ov, (255, 255, 255, 110 if on else 50), rect.center, self.r)
+        surf.blit(ov, (0, 0))
+
+
+class Scene:
+    """One game state (Title, Play, Pause, GameOver, ...). Subclass per state;
+    the kit owns the loop, you own these hooks."""
+    def __init__(self, kit):
+        self.kit = kit
+    def handle(self, ev): pass
+    def update(self, dt): pass
+    def draw(self, surf): pass
+
+
+class Kit:
+    """Owns the window, the delta-time loop, scene switching, screen shake,
+    hit-stop, particles and sound. Create one, then kit.run(FirstSceneClass)."""
+    def __init__(self, title="Game", logical=(480, 270), fps=60, palette=None):
+        self.title = title
+        self.lw, self.lh = logical
+        self.fps = fps
+        self.palette = palette or {}
+        self.shake = 0.0
+        self._hitstop = 0.0
+        self.scene = None
+        self.particles = Particles()
+        self.sound = Sound()
+        self.running = True
+        self.screen = self.canvas = self.touch = self.clock = None
+        self.frame = 0
+
+    def add_shake(self, amt): self.shake = min(self.shake + amt, 24)
+    def hitstop(self, ms): self._hitstop = max(self._hitstop, ms / 1000.0)
+    def go(self, scene): self.scene = scene
+    def quit(self): self.running = False
+
+    def _open(self):
+        pygame.init()
+        try:
+            pygame.display.set_mode((self.lw * 2, self.lh * 2),
+                                    pygame.RESIZABLE | pygame.SCALED)
+        except Exception:
+            pygame.display.set_mode((self.lw * 2, self.lh * 2))
+        pygame.display.set_caption(self.title)
+        self.screen = pygame.display.get_surface()
+        self.canvas = pygame.Surface((self.lw, self.lh)).convert()
+        self.touch = TouchControls(self.lw, self.lh)
+        self.clock = pygame.time.Clock()
+
+    def run(self, first_scene_cls):
+        self._open()
+        self.scene = first_scene_cls(self)
+        while self.running:
+            dt = min(self.clock.tick(self.fps) / 1000.0, 0.05)
+            for ev in pygame.event.get():
+                if ev.type == pygame.QUIT:
+                    self.running = False
+                if ev.type in (pygame.FINGERDOWN, pygame.FINGERMOTION, pygame.FINGERUP):
+                    self.touch.handle(ev)
+                self.scene.handle(ev)
+            if self._hitstop > 0:
+                self._hitstop -= dt
+            else:
+                self.scene.update(dt)
+                self.particles.update(dt)
+            if self.shake > 0:
+                self.shake = max(0.0, self.shake - 60 * dt)
+            self.canvas.fill(self.palette.get("bg", (12, 12, 20)))
+            self.scene.draw(self.canvas)
+            self.particles.draw(self.canvas)
+            self.touch.draw(self.canvas)
+            ox = oy = 0
+            if self.shake > 0.4:
+                ox = random.uniform(-self.shake, self.shake)
+                oy = random.uniform(-self.shake, self.shake)
+            sw, sh = self.screen.get_size()
+            self.screen.blit(pygame.transform.scale(self.canvas, (sw, sh)), (ox, oy))
+            pygame.display.flip()
+            self.frame += 1
+        pygame.quit()
+# ======= END TIMMY KIT — all game code goes BELOW this line ======='''
+
+_KIT_SECTION = """
+
+THE TIMMY KIT (non-negotiable — every game is built ON this, never from scratch):
+Below is a hand-written, runtime-tested engine substrate. EVERY game you produce starts with this
+kit pasted VERBATIM at the very top of the file (including both sentinel comment lines), and ALL of
+your game code goes below the END sentinel. Rules:
+- NEVER modify, trim, reorder, or 'improve' anything between the sentinels — not even whitespace.
+  When iterating on a game, reproduce the kit block byte-identical every time. Extend by subclassing
+  and composing BELOW it, never by editing inside it.
+- BUILD ON IT: subclass `Scene` for every state (Title, Play, Pause, GameOver, Win, ...); switch with
+  `self.kit.go(NextScene(self.kit))`; start the game with `Kit(title=..., logical=(480, 270),
+  palette=PAL).run(TitleScene)` inside main() under `if __name__ == \"__main__\":`.
+- USE the kit instead of re-implementing: `kit.particles.burst(...)` for every impact/pickup/death,
+  `kit.add_shake(n)` + `kit.hitstop(ms)` on big hits, `kit.sound.play(name)` with names from the kit's
+  table (jump, land, hit, pickup, shoot, blip, win, lose), `lerp/ease_out_cubic/ease_in_out/clamp`
+  for all tweening, and `kit.touch.dir` / `kit.touch.a_held` / `kit.touch.b_held` read alongside the
+  keyboard every frame so touch works automatically. The kit already handles QUIT, the touch overlay,
+  delta-time, letterbox scaling and the canvas — never write your own main loop or set_mode call.
+- The logical canvas is `kit.canvas` at `kit.lw x kit.lh` (pick a modest logical size like 480x270 or
+  426x240 and draw everything in those coordinates; the kit scales it to the window).
+- Esc handling, pausing, options, HUD, levels, dialogue, saving — all YOUR code, in Scenes, below the
+  kit. The save-file rule from above (JSON under ~/.local/share/<gameslug>/) still applies.
+
+```python
+""" + GAMEKIT + """
+```
+"""
+
 SYSTEM_PROMPT = """You are Timmy, a senior game developer who builds complete, genuinely PLAYABLE
 2D GAMES from a single self-contained Python file using pygame. Any genre is fair game — platformer,
 top-down shooter, twin-stick, puzzle, roguelike, RPG, arcade, tower defence, racing, beat-'em-up,
@@ -383,7 +693,10 @@ ALWAYS-ON BASELINE (every game, regardless of size, ships with all of these):
   persist to the current directory or `/tmp`.
 
 CODE CORRECTNESS — the bugs that pass a parse check and only bite when the window opens. Timmy
-pre-checks your code by IMPORTING it (not by opening the window), so trace each of these:
+pre-checks your code by IMPORTING it, then AUTO-PLAYTESTS it headlessly: the game is actually run
+(SDL dummy drivers), piloted with synthetic key/mouse/touch input for several seconds, then sent
+pygame.QUIT — it must open its window, survive real play, and exit cleanly. Crashes during play come
+back to you as tracebacks to fix. So trace each of these:
 - IMPORT-SAFE STRUCTURE: ALL game setup AND the main loop live inside a class and/or a `main()` and
   run ONLY under `if __name__ == "__main__":`. Top level is imports and definitions ONLY — never call
   `pygame.init()`, `pygame.display.set_mode()`, or start the loop at module top level, or importing
@@ -421,7 +734,101 @@ METHOD (the build dialogue):
 
 OUTPUT FORMAT: a tight message first (a few sentences — what you built, the name you gave it, what
 you're asking). THEN, only when actually providing code, exactly ONE ```python fenced block with the
-entire single-file game — never two blocks. When only planning or discussing, include no code block."""
+entire single-file game — never two blocks. When only planning or discussing, include no code block.""" + _KIT_SECTION
+
+# v1.2.0 — the DESIGN PASS. On a fresh build, one cheap call turns the request +
+# intake answers into a compact authoritative spec the code pass then implements.
+# Splitting design from code keeps a fast model focused: it stops juggling "what
+# should this game be" and "write 900 correct lines" in the same breath.
+SPEC_PROMPT = """You are the lead designer for Timmy, a forge for complete, playable 2D pygame games
+on Linux (a Kali/KDE desktop with keyboard+mouse AND a OnePlus 6 touchscreen phone). From the user's
+request and any intake answers, write ONE compact, authoritative GAME SPEC the programmer will
+implement exactly. Be bold and specific — concrete numbers, a real hook, zero hedging. Honour every
+choice the user already made precisely; invent confidently where they left it open.
+
+Output PLAIN TEXT (no markdown fences, no JSON), at most ~220 words, exactly these labelled lines:
+TITLE: <short evocative name — never generic>
+HOOK: <one sentence: what makes THIS game cool>
+GENRE/VIEW: <genre + perspective (side-on / top-down / fixed screen)>
+TARGET: <desktop / phone / both — from the user's choice; default both>
+PALETTE: <4-6 hex colours with roles, e.g. bg #1a1626, player #7adcff, danger #e65a6e ...>
+PLAYER: <what the player is + EXACT controls: keys AND the touch mapping (d-pad/A/B)>
+CORE LOOP: <what the player does moment-to-moment, with tuned numbers (speeds, jump height, fire
+rate, timer) where they matter>
+ENTITIES: <each enemy/object: name — behaviour — interaction, one line each, max 5>
+PROGRESSION: <levels/waves/areas and how difficulty rises; for story scope: areas, named NPCs, the
+arc in one line>
+WIN/LOSE: <exact win condition AND exact lose condition + what restart does>
+JUICE: <the 4-6 specific feedback moments this game sells: which events get particles, shake,
+hitstop, sfx names from (jump land hit pickup shoot blip win lose)>
+SCOPE: <quick arcade / substantial / deep-story — match the user's choice>"""
+
+# v1.2.0 — the QUALITY GATE critique. After a fresh build passes every automatic
+# check, one playtester call hunts for genuine playability gaps. must_fix is
+# reserved for real failures, not taste.
+PLAYTEST_PROMPT = """You are a brutally honest senior playtester reviewing a single-file pygame game
+against its design spec. You receive the SPEC and the full CODE. Judge it as a player: would this
+actually play, and does it deliver what the spec promised?
+
+Return ONLY a JSON object, no prose, no fences:
+{"must_fix": [{"title": "<short>", "detail": "<what's wrong + exactly what to change>"}],
+ "polish": [{"title": "<short>", "detail": "<nice-to-have>"}]}
+
+must_fix is ONLY for genuine failures (max 4, most important first):
+- the win condition is unreachable, or there is no lose state, or restart doesn't fully reset
+- a spec line is plainly not implemented (an entity missing, the core mechanic absent, wrong controls)
+- the phone is a target but touch input (kit.touch.dir / a_held / b_held) is never read in gameplay
+- unfair instant death at spawn, impossible first obstacle, or softlock states
+- the title screen is missing, or the game starts straight into play with no way to begin/retry
+- gameplay-breaking logic you can see in the code (collision that can't trigger, score never updates)
+Everything that is taste, balance polish, or extra content goes in "polish". If the game honestly
+delivers the spec, return {"must_fix": [], "polish": [...]} — do NOT invent problems."""
+
+# v1.2.0 — genre craft notes: compact, genre-specific requirements appended to the
+# spec so the code pass gets the trade secrets of THIS genre, not generic advice.
+GENRE_NOTES = {
+    "platformer": ("PLATFORMER CRAFT: coyote time (~0.1s) + a jump buffer (~0.12s) + variable jump "
+                   "height (cut vy on early release); squash on land, stretch on jump; one-way "
+                   "platforms drop-through with down+jump; camera leads the facing direction."),
+    "shooter":    ("SHOOTER CRAFT: pool bullets and enemies (the kit's Particles pattern); fire rate "
+                   "as a cooldown timer, never per-frame; muzzle flash + 1-frame recoil per shot; "
+                   "brief i-frames + hit-flash on player damage; waves escalate count AND behaviour."),
+    "puzzle":     ("PUZZLE CRAFT: the board is pure data, drawing reads it; one input = one move with "
+                   "debounce; check win/clears after every move; animate clears with ease_out_cubic "
+                   "before removing; an undo stack of board snapshots."),
+    "roguelike":  ("ROGUELIKE CRAFT: seed the RNG and show the seed; rooms+corridors generation with "
+                   "a guaranteed path to the exit; explored/fog map; instant restart on death with a "
+                   "new seed; meta-progress (best depth) in the save file."),
+    "story":      ("STORY/RPG CRAFT: dialogue as data (speaker, lines, choices -> labels/flags); "
+                   "typewriter text at ~40 chars/s, tap/key to complete then advance; tile maps as "
+                   "string grids with tile-triggered events; quest flags drive NPC lines; save/load "
+                   "the full flag+position state."),
+    "racing":     ("RACING/RUNNER CRAFT: speed ramps with a cap and per-level curve; spawn obstacles "
+                   "by DISTANCE not frames; near-miss bonus within a few px; parallax background "
+                   "layers at 0.3x/0.6x scroll; subtle speed-shake at top speed."),
+    "arcade":     ("ARCADE CRAFT: name the exact classic rules you are honouring, then add ONE twist; "
+                   "score with floating +N text; speed/difficulty steps every N points; persistent "
+                   "high score in the save file shown on the title screen."),
+    "defence":    ("TOWER-DEFENCE CRAFT: the path is a waypoint list enemies lerp along; build spots "
+                   "are a grid with thumb-sized tap targets; money/lives HUD always visible; a wave "
+                   "preview line ('next: 8 fast'); sell/upgrade on tap of an owned tower."),
+}
+_GENRE_KEYS = {
+    "platformer": ("platform", "jump", "metroidvania"),
+    "shooter":    ("shoot", "shmup", "bullet", "twin-stick", "twin stick", "space invader", "galaga"),
+    "puzzle":     ("puzzle", "match", "tetris", "sokoban", "block", "sliding"),
+    "roguelike":  ("roguelike", "rogue", "dungeon", "procedural"),
+    "story":      ("story", "rpg", "visual novel", "dialogue", "quest", "narrative", "adventure"),
+    "racing":     ("racing", "runner", "drive", "driving", "race", "endless"),
+    "arcade":     ("arcade", "snake", "pong", "breakout", "asteroids", "pac", "frogger", "high score"),
+    "defence":    ("tower defence", "tower defense", "defend", "waves of enemies"),
+}
+
+def genre_hints(text):
+    """Return up to two genre craft notes matched by keyword against the spec/request."""
+    low = (text or "").lower()
+    hits = [GENRE_NOTES[g] for g, keys in _GENRE_KEYS.items() if any(k in low for k in keys)]
+    return "\n".join(hits[:2])
 
 # Used to generate a tailored, clickable intake for a new GAME request.
 INTAKE_PROMPT = """You are the design analyst for Timmy, a forge for complete, playable 2D GAMES
@@ -1008,13 +1415,21 @@ MODEL_CONTEXT_TOKENS = {
     "deepseek/deepseek-v4-flash": 1000000, "deepseek/deepseek-v4-pro": 1000000,
 }
 DEFAULT_CONTEXT_TOKENS = 16000      # safe assumption for an unknown model
-REPLY_RESERVE_TOKENS   = 4000       # leave room for the model's answer
+REPLY_RESERVE_TOKENS   = 4000       # minimum room always left for the model's answer
+
+def _max_output_tokens(model):
+    """Completion budget for a model: the full MAX_OUTPUT_TOKENS on big-window
+    models, clamped to half the window on small ones so input + output always fit."""
+    ctx = MODEL_CONTEXT_TOKENS.get((model or "").lower(), DEFAULT_CONTEXT_TOKENS)
+    return max(1024, min(MAX_OUTPUT_TOKENS, ctx // 2))
 
 def context_budget_chars(model):
     """Usable input-char budget for a specific model, conservatively converted from
-    its token window with headroom reserved for the reply."""
+    its token window with headroom reserved for the reply — sized to the completion
+    budget we actually request (v1.2.0), not a fixed guess."""
     toks = MODEL_CONTEXT_TOKENS.get((model or "").lower(), DEFAULT_CONTEXT_TOKENS)
-    usable = max(2000, toks - REPLY_RESERVE_TOKENS)
+    reserve = max(REPLY_RESERVE_TOKENS, _max_output_tokens(model))
+    usable = max(2000, toks - reserve)
     # ~3 input chars per token (conservative for code), capped so we never send an
     # absurdly huge request even to a million-token model (keeps latency/cost sane).
     # The cap is generous enough that a large tool plus a long build conversation
@@ -1123,10 +1538,14 @@ def trim_history(messages, model=None):
                        "content": c[:keep_len] + "\n…(truncated by Timmy to fit this model's context)…"}
     return result
 
-def call_model(messages, provider_id=None, temperature=0.3, _fallback_chain=None):
+def call_model(messages, provider_id=None, temperature=0.3, _fallback_chain=None, max_tokens=None):
     """Call the selected provider, falling through its model chain on error.
-    Returns {"reply", "model", "provider"} or {"error"}.
+    Returns {"reply", "model", "provider", "finish"} or {"error"}.
     `temperature` defaults to 0.3; the code-build path lowers it for determinism.
+    v1.2.0: every request now carries an explicit max_tokens (per-model completion
+    budget) — without it, providers applied their own often-tiny default cap and
+    silently TRUNCATED whole games mid-file. "finish" carries finish_reason so the
+    caller can detect a cut reply and auto-continue it.
     If the whole provider chain fails AND a key exists for a configured fallback
     provider (e.g. Groq behind SiliconFlow), the call is retried there once so a
     SiliconFlow outage or quota stop doesn't dead-end the build."""
@@ -1142,7 +1561,8 @@ def call_model(messages, provider_id=None, temperature=0.3, _fallback_chain=None
     if not key:
         if _fallback_chain:
             nxt_pid, rest = _fallback_chain[0], _fallback_chain[1:]
-            alt = call_model(messages, nxt_pid, temperature, _fallback_chain=rest)
+            alt = call_model(messages, nxt_pid, temperature, _fallback_chain=rest,
+                             max_tokens=max_tokens)
             if not alt.get("error"):
                 alt["fellback_from"] = pid
                 return alt
@@ -1174,6 +1594,7 @@ def call_model(messages, provider_id=None, temperature=0.3, _fallback_chain=None
     last = None
     context_hit = False
     _retried_host = [False]   # one-shot host re-discovery guard (mutable for closure-free use)
+    _capped = set()           # models we already retried once with a smaller max_tokens
     for model in chain:
         # trim to THIS model's context window — the fix for "dies after long use":
         # a small-context model deeper in the chain now gets a request sized for it.
@@ -1185,6 +1606,10 @@ def call_model(messages, provider_id=None, temperature=0.3, _fallback_chain=None
             last = f"{model}: skipped (payload exceeds its context window)"
             context_hit = True
             continue
+        # per-model completion budget — the v1.2.0 fix for silently truncated games.
+        mo = _max_output_tokens(model)
+        if max_tokens is not None:
+            mo = max(256, min(int(max_tokens), mo))
         try:
             headers = {
                 "Content-Type": "application/json",
@@ -1192,15 +1617,37 @@ def call_model(messages, provider_id=None, temperature=0.3, _fallback_chain=None
                 "User-Agent": f"timmy/{__version__}",
                 "Accept": "application/json",
             }
-            body = {"model": model, "temperature": temperature, "messages": messages}
-            data = _http_post(chat_url, headers, body)
-            reply = data["choices"][0]["message"]["content"]
-            return {"reply": reply, "model": model, "provider": pid}
+            body = {"model": model, "temperature": temperature,
+                    "messages": messages, "max_tokens": mo}
+            data = _http_post(chat_url, headers, body, timeout=300)
+            choice = data["choices"][0]
+            reply = choice["message"]["content"]
+            return {"reply": reply, "model": model, "provider": pid,
+                    "finish": (choice.get("finish_reason") or "").lower()}
         except urllib.error.HTTPError as e:
             detail = ""
             try: detail = e.read().decode(errors="replace")[:400]
             except Exception: pass
             low = detail.lower()
+            # --- the provider rejected OUR completion budget (max_tokens cap) ---
+            # Must run before the context check below, which also matches "max_tokens".
+            if (e.code in (400, 413, 422) and model not in _capped
+                    and re.search(r"max_?(?:new_|completion_)?tokens", low)):
+                _capped.add(model)
+                num = re.search(r"max_?(?:new_|completion_)?tokens\D{0,60}?(\d{3,6})", low)
+                new_mo = max(1024, min(int(num.group(1)), mo - 1) if num else mo // 2)
+                if new_mo < mo:
+                    try:
+                        body = {"model": model, "temperature": temperature,
+                                "messages": messages, "max_tokens": new_mo}
+                        data = _http_post(chat_url, headers, body, timeout=300)
+                        choice = data["choices"][0]
+                        reply = choice["message"]["content"]
+                        return {"reply": reply, "model": model, "provider": pid,
+                                "finish": (choice.get("finish_reason") or "").lower()}
+                    except Exception as e2:
+                        last = f"{model}: retry with max_tokens={new_mo} failed: {e2}"
+                        continue
             # --- the conversation got too big for this model's context window ---
             if (e.code in (400, 413) and any(s in low for s in (
                     "context", "token", "maximum context", "too long", "context_length",
@@ -1226,10 +1673,13 @@ def call_model(messages, provider_id=None, temperature=0.3, _fallback_chain=None
                             chat_url = new_url
                             # retry the very same model against the correct host
                             try:
-                                body = {"model": model, "temperature": temperature, "messages": messages}
-                                data = _http_post(chat_url, headers, body)
-                                reply = data["choices"][0]["message"]["content"]
-                                return {"reply": reply, "model": model, "provider": pid}
+                                body = {"model": model, "temperature": temperature,
+                                        "messages": messages, "max_tokens": mo}
+                                data = _http_post(chat_url, headers, body, timeout=300)
+                                choice = data["choices"][0]
+                                reply = choice["message"]["content"]
+                                return {"reply": reply, "model": model, "provider": pid,
+                                        "finish": (choice.get("finish_reason") or "").lower()}
                             except Exception as e2:
                                 last = f"{model}: retry on {_HOST_OK[pid]} failed: {e2}"
                                 continue
@@ -1252,7 +1702,8 @@ def call_model(messages, provider_id=None, temperature=0.3, _fallback_chain=None
     def _try_fallback(reason):
         if _fallback_chain:
             nxt_pid, rest = _fallback_chain[0], _fallback_chain[1:]
-            alt = call_model(messages, nxt_pid, temperature, _fallback_chain=rest)
+            alt = call_model(messages, nxt_pid, temperature, _fallback_chain=rest,
+                             max_tokens=max_tokens)
             if not alt.get("error"):
                 alt["fellback_from"] = pid
                 return alt
@@ -1292,6 +1743,51 @@ def replace_first_code_block(reply, new_code):
         if pat.search(reply):
             return pat.sub(_do, reply, count=1)
     return reply
+
+def _unterminated(reply):
+    """True when a reply was visibly cut mid-code: an odd number of ``` fences."""
+    return bool(reply) and reply.count("```") % 2 == 1
+
+_CONTINUE_MSG = ("Your previous reply was cut off by the output token limit, mid-stream. Continue "
+                 "EXACTLY where it stopped: output ONLY the remaining content — no preamble, no "
+                 "apology, do NOT repeat anything already sent, and do NOT open a new code fence. "
+                 "If you were inside the ```python block, just keep writing the code from the exact "
+                 "cut point and close the block with ``` when the script is complete.")
+
+def _call_with_continue(messages, provider_id=None, temperature=0.3, max_tokens=None):
+    """v1.2.0 — call_model plus automatic continuation: when a reply is cut by the
+    completion limit (finish_reason == 'length', or an unterminated code fence),
+    ask the model to continue from the exact cut point and stitch the parts into
+    one seamless reply, up to CONTINUE_MAX_ROUNDS times. The death of half-games."""
+    res = call_model(messages, provider_id, temperature, max_tokens=max_tokens)
+    if res.get("error"):
+        return res
+    rounds = 0
+    while rounds < CONTINUE_MAX_ROUNDS and (
+            res.get("finish") == "length" or _unterminated(res.get("reply", ""))):
+        rounds += 1
+        partial = res.get("reply", "")
+        convo = list(messages) + [{"role": "assistant", "content": partial},
+                                  {"role": "user", "content": _CONTINUE_MSG}]
+        nxt = call_model(convo, provider_id, temperature, max_tokens=max_tokens)
+        if nxt.get("error"):
+            res["continue_note"] = "continuation call failed: " + nxt["error"]
+            break
+        cont = nxt.get("reply", "") or ""
+        # models love to re-open the fence — strip a leading fence line if we're
+        # already inside one, and drop a duplicated overlap line.
+        if _unterminated(partial):
+            cont = re.sub(r"^\s*```[a-zA-Z0-9_+-]*[ \t]*\n", "", cont, count=1)
+        p_lines = [l for l in partial.splitlines() if l.strip()]
+        c_lines = cont.splitlines()
+        if p_lines and c_lines and c_lines and c_lines[0].strip() and \
+                c_lines[0].strip() == p_lines[-1].strip():
+            cont = "\n".join(c_lines[1:])
+        joiner = "" if partial.endswith("\n") else "\n"
+        res["reply"] = partial + joiner + cont
+        res["finish"] = nxt.get("finish", "")
+        res["continued"] = rounds
+    return res
 
 # --------------------------------------------------------------------------
 # WHOLE-CODE ANALYSIS  -- catch clashes the model can't see in its own output
@@ -1603,26 +2099,35 @@ def _unassigned_self_attrs(tree):
         # an augmented assignment (self.x += 1) READS self.x before writing it, so a
         # name that ONLY ever appears as an augassign target was never truly initialized.
         # Collect those targets so a typo'd `self.valeu += 1` is caught.
+        # v1.2.0 FIX: the old code discarded the attr from assigned_attrs even when a
+        # plain `self.x = 0` ALSO existed — so the most common pattern in any game
+        # (`self.score = 0` in __init__, `self.score += 1` in play) was falsely flagged
+        # as a serious finding, failing correct code and burning auto-fix rounds on
+        # non-bugs. Now an aug-assign target only counts as unassigned when NO plain
+        # assignment of that attr exists anywhere in the class.
         augained = {}
+        _aug_targets = set()
         for n in ast.walk(cls):
             if (isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Attribute)
                     and isinstance(n.target.value, ast.Name) and n.target.value.id == "self"):
                 augained.setdefault(n.target.attr, n.target.lineno)
+                _aug_targets.add(id(n.target))
         for n in ast.walk(cls):
             if (isinstance(n, ast.Attribute)
                     and isinstance(n.value, ast.Name) and n.value.id == "self"):
                 if isinstance(n.ctx, (ast.Store, ast.Del)):
-                    assigned_attrs.add(n.attr)
+                    if id(n) not in _aug_targets:   # plain assignment only
+                        assigned_attrs.add(n.attr)
                 elif isinstance(n.ctx, ast.Load):
                     read_attrs.setdefault(n.attr, n.lineno)
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) \
                     and n.func.id in ("setattr", "getattr", "vars"):
                 dynamic = True
         # an attr whose ONLY assignment is an augmented one (self.x += …) was never
-        # initialized: treat it as a read of an unassigned attr, not an assignment.
+        # initialized: surface it as a read of an unassigned attr.
         for attr, ln in augained.items():
-            assigned_attrs.discard(attr)
-            read_attrs.setdefault(attr, ln)
+            if attr not in assigned_attrs:
+                read_attrs.setdefault(attr, ln)
         if any(m for m in cls.body
                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
                and m.name in ("__getattr__", "__setattr__", "__getattribute__")):
@@ -1778,6 +2283,154 @@ def analyze_code(code):
     ast_issues = analyze_with_ast(code)
     return {"issues": ast_issues, "engine": "ast", "clean": not ast_issues}
 
+# v1.2.0 — THE RUNTIME PLAYTEST. The old smoke test only IMPORTED the game, so every
+# bug that bites after the window opens (a NameError on frame 30, a crash when the
+# first enemy spawns, a loop that ignores QUIT) sailed straight through to the user.
+# This harness actually RUNS the game in a subprocess under SDL's dummy video/audio
+# drivers (fully headless — no window ever appears), pilots it with synthetic key /
+# mouse / finger input for a few seconds, then posts QUIT and requires a clean exit.
+# Exit codes: 0 ok · 6 exited instantly (no real loop) · 7 crashed (traceback on
+# stderr) · 8 never opened a window · 9 ignored pygame.QUIT. Timeout = hung loop.
+RUNTIME_HARNESS = r'''
+import os, sys, threading, time, runpy, traceback, warnings
+warnings.filterwarnings("ignore")
+os.environ["SDL_VIDEODRIVER"] = "dummy"
+os.environ["SDL_AUDIODRIVER"] = "dummy"
+os.environ["TIMMY_RUNTIME_TEST"] = "1"
+TARGET = sys.argv[1]
+PLAY = float(sys.argv[2]) if len(sys.argv) > 2 else 7.0
+T0 = time.time()
+STATE = {"quit_posted": False}
+
+def pilot():
+    try:
+        import pygame
+    except Exception:
+        return
+    t0 = time.time()
+    while time.time() - t0 < 12.0:
+        try:
+            if pygame.get_init() and pygame.display.get_surface():
+                break
+        except Exception:
+            pass
+        time.sleep(0.05)
+    else:
+        sys.stderr.write("TIMMY_RT: the game never opened a window / started its loop within 12s\n")
+        os._exit(8)
+    time.sleep(0.7)
+    keys = [pygame.K_RETURN, pygame.K_SPACE, pygame.K_RIGHT, pygame.K_d,
+            pygame.K_UP, pygame.K_w, pygame.K_SPACE, pygame.K_LEFT,
+            pygame.K_a, pygame.K_DOWN, pygame.K_s, pygame.K_RETURN]
+    end, i = time.time() + PLAY, 0
+    while time.time() < end:
+        k = keys[i % len(keys)]; i += 1
+        try:
+            pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=k, mod=0, unicode=""))
+            time.sleep(0.05)
+            pygame.event.post(pygame.event.Event(pygame.KEYUP, key=k, mod=0))
+            surf = pygame.display.get_surface()
+            if surf and i % 3 == 0:
+                w, h = surf.get_size()
+                pos = (w // 2, int(h * 0.7))
+                pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=pos, button=1))
+                pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=pos, button=1))
+                pygame.event.post(pygame.event.Event(pygame.FINGERDOWN, touch_id=1, finger_id=1,
+                                                     x=0.5, y=0.7, dx=0.0, dy=0.0, pressure=1.0))
+                pygame.event.post(pygame.event.Event(pygame.FINGERUP, touch_id=1, finger_id=1,
+                                                     x=0.5, y=0.7, dx=0.0, dy=0.0, pressure=0.0))
+        except Exception:
+            pass
+        time.sleep(0.10)
+    STATE["quit_posted"] = True
+    try:
+        pygame.event.post(pygame.event.Event(pygame.QUIT))
+    except Exception:
+        pass
+    time.sleep(3.0)
+    sys.stderr.write("TIMMY_RT: the game ignored pygame.QUIT - the main loop never exits\n")
+    os._exit(9)
+
+threading.Thread(target=pilot, daemon=True).start()
+try:
+    runpy.run_path(TARGET, run_name="__main__")
+except SystemExit:
+    pass
+except BaseException:
+    sys.stderr.write(traceback.format_exc())
+    sys.exit(7)
+if not STATE["quit_posted"] and time.time() - T0 < max(2.0, PLAY * 0.5):
+    sys.stderr.write("TIMMY_RT: the game exited almost immediately - no real game loop ran\n")
+    sys.exit(6)
+'''
+
+_RT_NOISE = ("no fast renderer", "pygame-ce", "pygame 2", "Hello from the pygame",
+             "ALSA", "aplay", "dummy", "libGL", "XDG_RUNTIME_DIR", "Warning:")
+
+def _rt_tail(blob, limit=1400):
+    """Last `limit` chars of harness output with known dummy-driver noise dropped.
+    When a traceback is present, snap to the LAST one so the model gets pure signal."""
+    blob = blob or ""
+    marker = "Traceback (most recent call last):"
+    if marker in blob:
+        blob = blob[blob.rfind(marker):]
+    lines = [l for l in blob.splitlines()
+             if l.strip() and not any(n in l for n in _RT_NOISE)]
+    return "\n".join(lines)[-limit:]
+
+def runtime_test(code):
+    """Run a pygame game headlessly under the pilot harness. Returns (ok, note).
+    ok=True with a note when the test was skipped (e.g. pygame not installed on
+    this box yet) — only a real in-game failure fails the check."""
+    vpy = run_python()
+    try:
+        probe = subprocess.run([vpy, "-c", "import pygame"],
+                               capture_output=True, timeout=30)
+        if probe.returncode != 0:
+            return True, ("skipped — pygame isn't installed in Timmy's venv yet "
+                          "(use the deps button); the import check still ran")
+    except Exception:
+        return True, "skipped — couldn't probe for pygame on this box"
+    tmpdir = tempfile.mkdtemp(prefix="timmy_rt_")
+    game = os.path.join(tmpdir, "game.py")
+    harness = os.path.join(tmpdir, "_timmy_rt.py")
+    try:
+        with open(game, "w", encoding="utf-8") as f:
+            f.write(code)
+        with open(harness, "w", encoding="utf-8") as f:
+            f.write(RUNTIME_HARNESS)
+        env = dict(os.environ)
+        env["SDL_VIDEODRIVER"] = "dummy"
+        env["SDL_AUDIODRIVER"] = "dummy"
+        try:
+            proc = subprocess.run([vpy, harness, game, str(RUNTIME_PLAY_SECONDS)],
+                                  capture_output=True, stdin=subprocess.DEVNULL,
+                                  timeout=RUNTIME_TIMEOUT, env=env, cwd=tmpdir)
+        except subprocess.TimeoutExpired:
+            return False, ("the game HUNG during the headless playtest — the main loop blocked "
+                           "or never exits (a while-loop without event handling, a blocking "
+                           "input()/sleep, or QUIT not honoured).")
+        err = proc.stderr.decode("utf-8", errors="replace")
+        tail = _rt_tail(err)
+        rc = proc.returncode
+        if rc == 0:
+            return True, f"played {RUNTIME_PLAY_SECONDS}s headlessly with synthetic input + clean quit"
+        if rc == 6:
+            return False, ("the game exited almost immediately — there's no real game loop "
+                           "running.\n" + tail)
+        if rc == 7:
+            return False, ("the game CRASHED during the headless playtest. Traceback:\n" + tail)
+        if rc == 8:
+            return False, ("the game never opened a window / started its main loop within 12s — "
+                           "is the setup stuck before the loop?\n" + tail)
+        if rc == 9:
+            return False, ("the game ignores pygame.QUIT — the window can never be closed. Handle "
+                           "the QUIT event in the main loop.\n" + tail)
+        return False, f"the headless playtest failed (exit {rc}).\n{tail}"
+    finally:
+        try: shutil.rmtree(tmpdir, ignore_errors=True)
+        except Exception: pass
+
 def smoke_test(code):
     """Silent quality checks on generated code. Returns (passed, report, checks).
     IMPORTANT: this only checks that the code PARSES and IMPORTS cleanly. It does
@@ -1849,7 +2502,7 @@ def smoke_test(code):
             "    sys.exit(7)\n"
         )
         try:
-            proc = subprocess.run([sys.executable, "-c", harness],
+            proc = subprocess.run([run_python(), "-c", harness],
                                   capture_output=True, stdin=subprocess.DEVNULL, timeout=20)
             out = proc.stdout.decode("utf-8", errors="replace")
             err = proc.stderr.decode("utf-8", errors="replace")
@@ -1900,6 +2553,15 @@ def smoke_test(code):
                 # only minor findings (e.g. unused vars) — note them, still pass
                 checks.append(("analysis", True, f"{analysis['engine']}: minor only — " +
                                "; ".join(analysis["issues"][:5])))
+        # 4. RUNTIME PLAYTEST (v1.2.0, pygame games): actually run it headlessly,
+        #    pilot it with synthetic input, and require a clean exit on QUIT. The
+        #    check the 1.1.x pipeline was missing — import-clean games that crash
+        #    on frame 30 stop here instead of in the user's lap.
+        if RUNTIME_TEST and tk and tk.get("module") == "pygame":
+            ok_rt, note_rt = runtime_test(code)
+            checks.append(("runtime", ok_rt, note_rt))
+            if not ok_rt:
+                return False, "Runtime playtest failed: " + note_rt, checks
         return True, "", checks
     finally:
         try: os.unlink(path)
@@ -1936,10 +2598,30 @@ def chat_with_autotest(messages, provider_id=None):
                     break
             convo = convo[:insert_at] + [{"role": "system", "content": cmap}] + convo[insert_at:]
 
+    # DESIGN PASS (v1.2.0): on a FRESH build only, distil the request + intake
+    # answers into an authoritative spec, add matching genre craft notes, and pin
+    # it right before the final user turn. The code pass then implements a concrete
+    # design instead of juggling design and 900 lines of code in one breath.
+    spec = None
+    if not existing:
+        spec = make_spec(convo, provider_id)
+        if spec:
+            note = ("GAME DESIGN SPEC — authoritative. Implement EXACTLY this (every line), "
+                    "then push the polish further:\n" + spec)
+            hints = genre_hints(spec)
+            if hints:
+                note += "\n\n" + hints
+            insert_at = len(convo)
+            for i in range(len(convo) - 1, -1, -1):
+                if convo[i].get("role") == "user":
+                    insert_at = i
+                    break
+            convo = convo[:insert_at] + [{"role": "system", "content": note}] + convo[insert_at:]
+
     rounds = []
     # Lower temperature on code generation: more deterministic, fewer hallucinated
     # APIs and careless slips. Reasoning paths (intake/review) keep the default 0.3.
-    res = call_model(convo, provider_id, temperature=BUILD_TEMPERATURE)
+    res = _call_with_continue(convo, provider_id, temperature=BUILD_TEMPERATURE)
     if res.get("error"):
         return res
 
@@ -1971,6 +2653,13 @@ def chat_with_autotest(messages, provider_id=None):
                        "minor": minor})
         if passed or attempt == AUTOTEST_MAX_ROUNDS:
             res["autotest"] = {"ran": True, "passed": passed, "rounds": rounds}
+            if spec:
+                res["spec"] = spec
+            # QUALITY GATE (v1.2.0): fresh builds that pass everything get one
+            # playtest-critique round; the improved code is kept only if it ALSO
+            # passes every check. Never runs on the user's own iteration requests.
+            if passed and spec and QUALITY_PASS:
+                res = _quality_gate(res, convo, provider_id, spec)
             return res
         # FEED THE FAILURE BACK with a structural map so the fix is informed, not blind.
         # Giving the model a map of its own code + the exact analyzer findings produces a
@@ -1984,21 +2673,69 @@ def chat_with_autotest(messages, provider_id=None):
             fix_msg += f"\n=== structure of the code you just wrote (keep calls consistent) ===\n{cmap}\n"
         fix_msg += ("\nDo not introduce new problems. Re-check that every function is called with "
                     "the right arguments and every name is defined before use. Quick pass on the "
-                    "usual Linux-GUI traps: any widget a thread/callback touches is stored on self; "
-                    "thread results marshalled back to the GUI thread (widget.after / signals, never "
-                    "a direct widget call from a worker); the toolkit import wrapped so a missing "
-                    "toolkit shows a clear message, not a traceback; no bare except: pass; no "
-                    "shell=True on a built command; encoding=\"utf-8\" on text I/O.")
+                    "usual game traps: the kit block is byte-identical and untouched; every Scene "
+                    "the code switches to exists and takes (self, kit); motion uses dt; the loop "
+                    "never blocks (no input()/time.sleep in the play path); tile/grid indexing is "
+                    "bounds-checked; sounds use only the kit's names; no invented pygame APIs; no "
+                    "bare except: pass swallowing real errors.")
         convo = convo + [
             {"role": "assistant", "content": res["reply"]},
             {"role": "user", "content": fix_msg},
         ]
-        nxt = call_model(convo, provider_id, temperature=BUILD_TEMPERATURE)
+        nxt = _call_with_continue(convo, provider_id, temperature=BUILD_TEMPERATURE)
         if nxt.get("error"):
             res["autotest"] = {"ran": True, "passed": False, "rounds": rounds,
                                "note": "auto-fix call failed: " + nxt["error"]}
             return res
         res = nxt
+
+def _quality_gate(res, convo, provider_id, spec):
+    """v1.2.0 — one playtest-critique pass on a fresh, fully passing build. If the
+    critique finds genuine must-fix gaps, run ONE improvement round and keep the
+    result only if it passes every check again; otherwise keep the passing build."""
+    code = extract_code(res.get("reply", ""))
+    if not code:
+        return res
+    critique = call_model([
+        {"role": "system", "content": PLAYTEST_PROMPT},
+        {"role": "user", "content": f"=== SPEC ===\n{spec}\n\n=== CODE ===\n```python\n{code}\n```"},
+    ], provider_id, max_tokens=1200)
+    if critique.get("error"):
+        return res
+    parsed = _parse_json_reply(critique.get("reply", "")) or {}
+    must = [m for m in parsed.get("must_fix", []) if isinstance(m, dict) and m.get("title")][:4]
+    if not must:
+        res["playtest"] = {"clean": True}
+        return res
+    titles = [str(m["title"]) for m in must]
+    items = "\n".join(f"- {m['title']}: {m.get('detail', '')}" for m in must)
+    fix_msg = ("A playtest review of your game found genuine playability gaps. Fix ALL of them and "
+               "return the FULL corrected script (one ```python block, nothing omitted, the kit "
+               "block byte-identical):\n\n" + items)
+    convo2 = list(convo) + [{"role": "assistant", "content": res["reply"]},
+                            {"role": "user", "content": fix_msg}]
+    nxt = _call_with_continue(convo2, provider_id, temperature=BUILD_TEMPERATURE)
+    if nxt.get("error"):
+        res["playtest"] = {"applied": False, "items": titles, "note": nxt["error"]}
+        return res
+    new_code = extract_code(nxt.get("reply", ""))
+    if not new_code:
+        res["playtest"] = {"applied": False, "items": titles,
+                           "note": "improvement reply had no code — kept the passing build"}
+        return res
+    fixed, _ = autofix_with_ruff(new_code)
+    if fixed != new_code:
+        nxt["reply"] = replace_first_code_block(nxt.get("reply", ""), fixed)
+        new_code = fixed
+    ok2, report2, _checks2 = smoke_test(new_code)
+    if ok2:
+        nxt["autotest"] = res.get("autotest")
+        nxt["spec"] = spec
+        nxt["playtest"] = {"applied": True, "items": titles}
+        return nxt
+    res["playtest"] = {"applied": False, "items": titles,
+                       "note": "the improved version failed checks — kept the version that passes"}
+    return res
 
 def review_code(code, provider_id=None):
     """Feature #2 — the 'review my code' button. Runs the independent static analyzer,
@@ -2065,6 +2802,25 @@ def make_intake(request, provider_id=None):
         if q.get("q") and len(opts) >= 2:
             qs.append({"q": str(q["q"]), "options": opts, "multi": bool(q.get("multi"))})
     return {"intake": {"summary": parsed.get("summary", ""), "questions": qs}}
+
+def make_spec(convo, provider_id=None):
+    """v1.2.0 — the DESIGN PASS. Distil the user's request + intake answers into a
+    compact authoritative spec for the code pass. Returns the spec text or None;
+    never blocks a build (any failure just skips the spec)."""
+    user_blob = "\n".join((m.get("content") or "") for m in (convo or [])
+                          if m.get("role") == "user").strip()[-4000:]
+    if not user_blob:
+        return None
+    res = call_model([{"role": "system", "content": SPEC_PROMPT},
+                      {"role": "user", "content": user_blob}], provider_id,
+                     temperature=DESIGN_TEMPERATURE, max_tokens=1024)
+    if res.get("error"):
+        return None
+    spec = re.sub(r"```[a-zA-Z]*", "", res.get("reply", "") or "").strip()
+    # sanity: a real spec has the labelled lines; garbage gets dropped silently
+    if "TITLE:" not in spec or "WIN/LOSE:" not in spec or len(spec) < 120:
+        return None
+    return spec[:2600]
 
 def structure_followup(reply, convo, provider_id=None):
     """When the model's reply contained NO code, it usually means it asked the user
